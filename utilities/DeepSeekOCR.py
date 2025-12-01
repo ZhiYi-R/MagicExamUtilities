@@ -19,6 +19,9 @@ class DeepSeekOCR:
         self.__dump_ocr_response = dump_ocr_response
     
     def ocr(self, image_path: pathlib.Path) -> str:
+        if not image_path.exists():
+            raise FileNotFoundError(f'Image {image_path} does not exist')
+        print(f'OCRing image: {image_path}')
         with open(image_path, 'rb') as f:
             image_base64 = base64.b64encode(f.read()).decode('utf-8')
             response = self.__client.chat.completions.create(
@@ -49,6 +52,10 @@ class DeepSeekOCR:
             raise RuntimeError(f'No choices returned from OpenAI API for image {image_path}')
         if not response.choices[0].message.content:
             raise RuntimeError(f'No content returned from OpenAI API for image {image_path}')
+        if not response.usage:
+            print(f'OCR Done for image: {image_path}, length: {len(response.choices[0].message.content)}')
+        else:
+            print(f'OCR Done for image: {image_path}, length: {len(response.choices[0].message.content)}, usage: {response.usage.total_tokens}')
         if not self.__dump_ocr_response:
             return response.choices[0].message.content
         else:
