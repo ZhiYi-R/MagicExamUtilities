@@ -27,6 +27,7 @@ class Summarization:
             4. 请确保你的公式输出正确，请使用LaTeX格式。
             5. 请确保你的表格输出正确，请使用Markdown格式。
             6. 如果内容是复习课，确保你输出的文本包含复习的所有内容，不要缺少任何重要的信息，如果其讲的不够详细，请补充其详细内容。
+            7. 你的输出除了报告的Markdown文本外，请不要输出任何多余的文本（直接输出Markdown源码，不要包裹任何代码块之类的东西)。
             '''
         elif text_source == TextSource.STT:
             self.__text_prompt = '''
@@ -37,12 +38,13 @@ class Summarization:
             4. 确保你的输出只包含简体中文，如果原文是别的语言，确保你已经进行了翻译。
             5. 确保你输出的文本包含原始录音的所有关键信息，不要缺少任何重要的信息。
             6. 如果录音内容是复习课，确保你输出的文本包含复习的所有内容，不要缺少任何重要的信息，如果其讲的不够详细，请补充其详细内容。
+            7. 你的输出除了报告的Markdown文本外，请不要输出任何多余的文本（直接输出Markdown源码，不要包裹任何代码块之类的东西)。
             '''
         else:
             raise ValueError(f'Invalid text source: {text_source}')
     
     def summarize(self, text: str) -> str:
-        print(f'Summarizing text: {text}')
+        print(f'Summarizing text of length {len(text)}')
         if 'qwen3' in os.environ['SUMMARIZATION_MODEL'].lower():
             user_prompt = f'\\no_think 请对以下文本进行总结，请使用Markdown格式输出：\n{text}'
         else:
@@ -61,9 +63,9 @@ class Summarization:
         if not response.choices[0].message.content:
             raise RuntimeError(f'No content returned from OpenAI API for text {text}')
         if not response.usage:
-            print(f'Summarization Done for text: {text}, length: {len(response.choices[0].message.content)}')
+            print(f'Summarization Done for text, length: {len(response.choices[0].message.content)}')
         else:
-            print(f'Summarization Done for text: {text}, length: {len(response.choices[0].message.content)}, usage: {response.usage.total_tokens}')
+            print(f'Summarization Done for text, length: {len(response.choices[0].message.content)}, usage: {response.usage.total_tokens}')
         if self.__dump_summarization_response:
             dump_file_path = self.__dump_dir.joinpath(f'Summarization_{time.strftime("%Y_%m_%d-%H_%M_%S")}.json')
             with open(dump_file_path, 'w') as f:
