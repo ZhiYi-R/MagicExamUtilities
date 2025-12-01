@@ -1,5 +1,7 @@
 # 妙妙期末小工具
 
+本项目基于[GPL v3.0](https://www.gnu.org/licenses/gpl-3.0.html)协议开源，Don't be an asshole!
+
 ## What is this
 
 本项目旨在构建一个用AI辅助期末复习的工具（没有作弊功能），当前已经实现的功能有：
