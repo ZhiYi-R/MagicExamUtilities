@@ -80,26 +80,30 @@ class AskAIWorker(BaseWorker):
             'ask': self._ask,
         }
 
-    def _ask(self, question: str, timeout: Optional[float] = None) -> str:
+    def _ask(self, question: str, kb_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
         """
         Process a question with tool calling.
 
         Args:
             question: User's question
+            kb_id: Optional knowledge base ID for scoped search
             timeout: Maximum time to wait for result
 
         Returns:
             Answer to the question
         """
-        print(f'[AskAIWorker] Processing question: {question}')
+        print(f'[AskAIWorker] Processing question: {question}' + (f' (KB: {kb_id})' if kb_id else ''))
 
         # Build system prompt
-        system_prompt = """你是一个学习助手，帮助学生从已经处理的课件和笔记中回答问题。
+        kb_context = f"\n\n当前搜索范围：知识库 '{kb_id}'" if kb_id else ""
+        system_prompt = f"""你是一个学习助手，帮助学生从已经处理的课件和笔记中回答问题。{kb_context}
 
 你可以使用以下工具来搜索缓存的内容：
-- search_cache: 搜索关键词相关的内容
+- search_cache: 搜索关键词相关的内容（可指定知识库 ID 进行限定搜索）
 - get_sections_by_type: 按类型获取内容（表格、公式、代码等）
 - list_cached_documents: 列出所有已缓存的文档
+- list_knowledge_bases: 列出所有知识库
+- get_available_pdfs: 列出所有有缓存的 PDF 文档
 
 请根据用户的问题，使用合适的工具搜索相关信息，然后给出准确的答案。
 
@@ -126,6 +130,10 @@ class AskAIWorker(BaseWorker):
                 for tool_call in tool_calls:
                     tool_name = tool_call.get('name', '')
                     tool_args = tool_call.get('arguments', {})
+
+                    # Auto-inject kb_id for search_cache if specified
+                    if tool_name == 'search_cache' and kb_id:
+                        tool_args['kb_id'] = kb_id
 
                     # Find and execute the tool
                     for tool in self._tools:
@@ -180,18 +188,19 @@ class AskAIWorker(BaseWorker):
 
         return answer
 
-    def ask(self, question: str, timeout: Optional[float] = None) -> str:
+    def ask(self, question: str, kb_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
         """
         Ask a question (public interface).
 
         Args:
             question: User's question
+            kb_id: Optional knowledge base ID for scoped search
             timeout: Maximum time to wait for result
 
         Returns:
             Answer to the question
         """
-        future = self.submit('ask', question)
+        future = self.submit('ask', question, kb_id)
         return future.get(timeout=timeout)
 
     def _estimate_tokens(self, task) -> int:

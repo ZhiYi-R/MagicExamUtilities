@@ -1,5 +1,8 @@
 """
 Summarization Worker for text summarization.
+
+Supports both direct summarization and retrieval-augmented summarization
+for handling documents that exceed context window limits.
 """
 
 import os
@@ -7,7 +10,7 @@ import time
 import json
 import pathlib
 from enum import Enum
-from typing import Optional
+from typing import Optional, List
 from openai import OpenAI
 
 from ..worker import BaseWorker, get_rate_limit_config
@@ -91,6 +94,7 @@ class SummarizationWorker(BaseWorker):
         """Register Summarization methods."""
         self._methods = {
             'summarize': self._summarize,
+            'summarize_long': self._summarize_long_text,
         }
 
     def _summarize(self, text: str) -> str:
@@ -142,16 +146,122 @@ class SummarizationWorker(BaseWorker):
             return len(text) + 2000
         return 5000  # Conservative default
 
-    def summarize(self, text: str, timeout: Optional[float] = None) -> str:
+    def _split_text_into_chunks(self, text: str, max_chars: int = 8000) -> List[str]:
+        """
+        Split text into chunks for processing.
+
+        Args:
+            text: Text to split
+            max_chars: Maximum characters per chunk
+
+        Returns:
+            List of text chunks
+        """
+        chunks = []
+        current_chunk = ""
+        paragraphs = text.split('\n\n')
+
+        for paragraph in paragraphs:
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+
+            # If single paragraph is too long, split by sentences
+            if len(paragraph) > max_chars:
+                sentences = paragraph.split('。')
+                for sentence in sentences:
+                    sentence = sentence.strip()
+                    if not sentence:
+                        continue
+                    sentence += '。'
+                    if len(current_chunk) + len(sentence) > max_chars and current_chunk:
+                        chunks.append(current_chunk.strip())
+                        current_chunk = sentence
+                    else:
+                        current_chunk += ' ' + sentence if current_chunk else sentence
+            else:
+                if len(current_chunk) + len(paragraph) > max_chars and current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = paragraph
+                else:
+                    current_chunk += '\n\n' + paragraph if current_chunk else paragraph
+
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+
+        return chunks
+
+    def _summarize_long_text(
+        self,
+        text: str,
+        max_chars_per_chunk: int = 8000,
+        progress_callback=None
+    ) -> str:
+        """
+        Summarize long text by splitting into chunks.
+
+        Args:
+            text: Long text to summarize
+            max_chars_per_chunk: Maximum characters per chunk
+            progress_callback: Optional callback for progress updates
+
+        Returns:
+            Combined summary
+        """
+        # Split into chunks
+        chunks = self._split_text_into_chunks(text, max_chars_per_chunk)
+        print(f"[SummarizationWorker] Split text into {len(chunks)} chunks")
+
+        # Summarize each chunk
+        chunk_summaries = []
+        for i, chunk in enumerate(chunks):
+            if progress_callback:
+                progress_callback(i, len(chunks), f"Summarizing chunk {i+1}/{len(chunks)}")
+
+            print(f"[SummarizationWorker] Summarizing chunk {i+1}/{len(chunks)} (length: {len(chunk)})")
+            summary = self._summarize(chunk)
+            chunk_summaries.append(summary)
+
+        # Combine summaries
+        combined_text = '\n\n'.join(chunk_summaries)
+        print(f"[SummarizationWorker] Combined summaries length: {len(combined_text)}")
+
+        # If combined text is still too long, summarize again
+        if len(combined_text) > max_chars_per_chunk:
+            if progress_callback:
+                progress_callback(len(chunks), len(chunks), "Creating final summary...")
+            print("[SummarizationWorker] Combined summary still long, creating final summary...")
+            return self._summarize(combined_text)
+
+        return combined_text
+
+    def summarize(
+        self,
+        text: str,
+        timeout: Optional[float] = None,
+        use_chunking: bool = False,
+        max_chars: int = 8000,
+        progress_callback=None
+    ) -> str:
         """
         Summarize the given text.
 
         Args:
             text: Text to summarize
             timeout: Maximum time to wait for result (seconds)
+            use_chunking: Whether to use chunking for long texts
+            max_chars: Maximum characters before chunking is triggered (if use_chunking=True)
+            progress_callback: Optional callback(chunk_index, total_chunks, message)
 
         Returns:
             Summarized text in Markdown format
         """
-        future = self.submit('summarize', text)
-        return future.get(timeout=timeout)
+        # Decide whether to use chunking
+        if use_chunking and len(text) > max_chars:
+            # For long text, use chunking
+            future = self.submit('summarize_long', text, max_chars, progress_callback)
+            return future.get(timeout=timeout)
+        else:
+            # For short text, use direct summarization
+            future = self.submit('summarize', text)
+            return future.get(timeout=timeout)

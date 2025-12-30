@@ -8,12 +8,14 @@
 
 1. 从老师的复习课录音生成复习（预习）笔记
 2. 从老师的教学PPT生成复习(预习)笔记
+3. **Ask AI**：从已经生成的笔记和原文提供的上下文中回答问题
+4. **知识库管理**：按科目分组管理 PDF，支持独立索引和搜索
+5. **缓存功能**：基于文件哈希的智能缓存，避免重复处理
+6. **分块总结**：处理超长文本，突破模型上下文窗口限制
 
 计划实现的功能有：
 
-1. ASK AI：从已经生成的笔记和原文提供的上下文中回答问题
-2. 缓存功能：如果cache中已经存在ocr/stt结果且修改时间晚于输入文件，则直接从cache中读取
-3. 往年题&作业题库：从往年的作业题和作业题库生成复习（预习）题和答案解析
+1. 往年题&作业题库：从往年的作业题和作业题库生成复习（预习）题和答案解析
 
 ## But how to use it?
 
@@ -80,6 +82,52 @@ python main.py --type [audio|pdf] --input [input_files] --output [output_dir]
 [https://api.siliconflow.cn/v1/audio/transcriptions](https://api.siliconflow.cn/v1/audio/transcriptions)
 
 ## Changelog
+
+### [0.7.0] - 2024-12-30
+
+**新增：知识库管理系统**
+- 新增 `utilities/knowledge_base/` 模块：知识库管理功能
+  - `manager.py`: KnowledgeBaseManager，管理知识库的 CRUD 操作
+  - `models.py`: KnowledgeBase 数据模型和存储
+- 支持按科目创建知识库，独立管理 PDF 文档
+- 支持为每个知识库构建独立的语义搜索索引
+- GUI 新增"知识库管理"标签页，提供可视化管理界面
+
+**新增：Ask AI 功能**
+- 新增 `utilities/workers/ask_ai_worker.py`：基于 LangChain 的 AI 问答 Worker
+- 集成检索工具，支持从缓存的 PDF/音频内容中召回相关信息
+- 支持知识库隔离搜索，限定搜索范围到特定科目
+- GUI 新增"Ask AI"标签页，提供问答界面
+
+**新增：分块总结功能**
+- SummarizationWorker 新增分块总结模式，支持处理超长文本
+- 智能分块：按段落和句子分割，保持语义完整性
+- 两阶段总结：先分块总结，再合并摘要，突破上下文窗口限制
+- GUI 新增"高级选项"，可配置分块阈值
+
+**优化：GUI 布局重构**
+- 重构为上下流式中心对齐布局
+- 使用 Accordion 组件折叠高级选项
+- 添加清空按钮，方便重置表单
+- 优化视觉层次和间距
+
+**架构变更：**
+- `utilities/retrieval/`: 新增检索模块
+  - `retriever.py`: CacheRetriever，支持关键词和语义搜索
+  - `tools.py`: LangChain 工具定义
+  - `cache_loader.py`: 缓存加载器
+- `utilities/workers/ask_ai_worker.py`: Ask AI Worker
+
+**使用方式：**
+```bash
+# GUI 模式 (推荐)
+python main.py --gui
+
+# 新功能：
+# - Ask AI: 基于已处理内容回答问题
+# - 知识库管理: 按科目分组管理 PDF
+# - 分块总结: 处理超长文本
+```
 
 ### [0.6.0] - 2024-12-30
 

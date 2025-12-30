@@ -14,6 +14,7 @@ import faiss
 
 from .cache_loader import CacheLoader
 from ..models import PDFCache, SectionType
+from ..knowledge_base.manager import KnowledgeBaseManager
 
 
 class SemanticSearcher:
@@ -175,20 +176,23 @@ class CacheRetriever:
     Main retriever for cached OCR content.
 
     Combines keyword search and semantic search.
+    Supports knowledge base isolation.
     """
 
-    def __init__(self, cache_dir: Path):
+    def __init__(self, cache_dir: Path, kb_manager: KnowledgeBaseManager = None):
         """
         Initialize the cache retriever.
 
         Args:
             cache_dir: Base cache directory
+            kb_manager: Optional KnowledgeBaseManager for KB isolation
         """
         self._cache_dir = cache_dir
         self._loader = CacheLoader(cache_dir)
         self._semantic_searcher = SemanticSearcher()
         self._caches = []
         self._index_path = cache_dir.joinpath('semantic_index')
+        self._kb_manager = kb_manager
 
     def load_caches(self):
         """Load all cached PDF results."""
@@ -287,6 +291,77 @@ class CacheRetriever:
         unique_results = []
         for result in results:
             # Simple deduplication by first line
+            first_line = result.split('\n')[0]
+            if first_line not in seen:
+                seen.add(first_line)
+                unique_results.append(result)
+                if len(unique_results) >= limit:
+                    break
+
+        return unique_results
+
+    def search_in_kb(
+        self,
+        query: str,
+        kb_id: str,
+        method: str = 'semantic',
+        limit: int = 5
+    ) -> List[str]:
+        """
+        Search within a specific knowledge base.
+
+        Args:
+            query: Search query
+            kb_id: Knowledge base ID
+            method: Search method ('keyword', 'semantic', 'hybrid')
+            limit: Maximum number of results
+
+        Returns:
+            List of formatted search results
+
+        Raises:
+            ValueError: If kb_id not found
+        """
+        if not self._kb_manager:
+            raise ValueError("KnowledgeBaseManager not initialized")
+
+        kb = self._kb_manager.get_knowledge_base(kb_id)
+        if not kb:
+            raise ValueError(f"Knowledge base '{kb_id}' not found")
+
+        results = []
+
+        if method in ('keyword', 'hybrid'):
+            # Keyword search within KB PDFs
+            if not self._caches:
+                self.load_caches()
+
+            # Filter caches to only KB PDFs
+            kb_caches = [c for c in self._caches if Path(c.file_path).name in kb.pdf_files]
+            keyword_results = self._loader.search_keyword(query, kb_caches)
+            for result in keyword_results[:limit]:
+                results.append(result)
+
+        if method in ('semantic', 'hybrid'):
+            # Semantic search using KB-specific index
+            searcher = self._kb_manager.get_semantic_searcher(kb_id)
+            if not searcher or not searcher.is_ready:
+                # Build index if not exists
+                self._kb_manager.build_kb_index(kb_id)
+                searcher = self._kb_manager.get_semantic_searcher(kb_id)
+
+            if searcher and searcher.is_ready:
+                semantic_results = searcher.search(query, k=limit)
+                for doc, meta, score in semantic_results:
+                    source = meta.get('source', 'Unknown')
+                    page = meta.get('page', '')
+                    page_info = f", Page {page}" if page else ""
+                    results.append(f"[{source}{page_info}] (similarity: {score:.2f})\n{doc}\n")
+
+        # Deduplicate and limit results
+        seen = set()
+        unique_results = []
+        for result in results:
             first_line = result.split('\n')[0]
             if first_line not in seen:
                 seen.add(first_line)
