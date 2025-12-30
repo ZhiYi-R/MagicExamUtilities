@@ -7,10 +7,82 @@ import threading
 import time
 import uuid
 from queue import Queue, Empty
-from typing import Any, Callable, Optional, Dict
-from dataclasses import dataclass
+from typing import Any, Callable, Optional, Dict, Tuple
+from dataclasses import dataclass, field
 
 from .rate_limiter import RateLimiter
+
+
+@dataclass
+class CostTracker:
+    """Track API costs for a worker."""
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cost: float = 0.0
+    request_count: int = 0
+
+    # Pricing in USD per 1M tokens (None = not configured)
+    input_price_per_m: Optional[float] = None
+    output_price_per_m: Optional[float] = None
+
+    def add_usage(self, input_tokens: int, output_tokens: int) -> float:
+        """
+        Add token usage and return the cost for this request.
+
+        Args:
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+
+        Returns:
+            Cost in USD for this request (0 if pricing not configured)
+        """
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.request_count += 1
+
+        # Calculate cost if pricing is configured
+        if self.input_price_per_m is not None and self.output_price_per_m is not None:
+            input_cost = (input_tokens / 1_000_000) * self.input_price_per_m
+            output_cost = (output_tokens / 1_000_000) * self.output_price_per_m
+            request_cost = input_cost + output_cost
+            self.total_cost += request_cost
+            return request_cost
+
+        return 0.0
+
+    def format_cost(self, cost: float) -> str:
+        """Format cost for display."""
+        return f"${cost:.6f}" if cost > 0 else "N/A"
+
+    def get_summary(self) -> str:
+        """Get a summary of usage and costs."""
+        parts = [
+            f"requests: {self.request_count}",
+            f"input_tokens: {self.total_input_tokens:,}",
+            f"output_tokens: {self.total_output_tokens:,}",
+        ]
+        if self.total_cost > 0:
+            parts.append(f"total_cost: {self.format_cost(self.total_cost)}")
+        return ", ".join(parts)
+
+
+def get_pricing_config(prefix: str) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Get pricing configuration from environment variables.
+
+    Args:
+        prefix: Environment variable prefix (e.g., 'OCR', 'ASR', 'SUMMARIZATION')
+
+    Returns:
+        Tuple of (input_price_per_m, output_price_per_m) in USD
+    """
+    input_price = os.environ.get(f'{prefix}_INPUT_PRICE_PER_M')
+    output_price = os.environ.get(f'{prefix}_OUTPUT_PRICE_PER_M')
+
+    input_price_per_m = float(input_price) if input_price else None
+    output_price_per_m = float(output_price) if output_price else None
+
+    return input_price_per_m, output_price_per_m
 
 
 @dataclass
@@ -81,7 +153,8 @@ class BaseWorker(threading.Thread):
                  name: str,
                  rpm: Optional[int] = None,
                  tpm: Optional[int] = None,
-                 poll_interval: float = 0.1):
+                 poll_interval: float = 0.1,
+                 pricing_prefix: Optional[str] = None):
         """
         Initialize the worker.
 
@@ -90,6 +163,7 @@ class BaseWorker(threading.Thread):
             rpm: Requests per minute limit (None = no limit)
             tpm: Tokens per minute limit (None = no limit)
             poll_interval: Time to sleep when queue is empty (seconds)
+            pricing_prefix: Prefix for pricing env vars (e.g., 'OCR', 'SUMMARIZATION')
         """
         super().__init__(daemon=True, name=name)
         self._queue: Queue[Task] = Queue()
@@ -97,6 +171,16 @@ class BaseWorker(threading.Thread):
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
         self._methods: Dict[str, Callable] = {}
+
+        # Initialize cost tracker
+        self._cost_tracker = CostTracker()
+        if pricing_prefix:
+            input_price, output_price = get_pricing_config(pricing_prefix)
+            self._cost_tracker.input_price_per_m = input_price
+            self._cost_tracker.output_price_per_m = output_price
+            if input_price is not None or output_price is not None:
+                print(f"[{name}] Pricing configured: input=${input_price}/M, output=${output_price}/M")
+
         # Note: _register_methods should be called by subclasses after their initialization
 
     def _register_methods(self) -> None:
@@ -189,6 +273,19 @@ class BaseWorker(threading.Thread):
         """
         return 1
 
+    def _track_usage(self, input_tokens: int, output_tokens: int) -> float:
+        """
+        Track token usage and return the cost for this request.
+
+        Args:
+            input_tokens: Number of input tokens consumed
+            output_tokens: Number of output tokens consumed
+
+        Returns:
+            Cost in USD for this request (0 if pricing not configured)
+        """
+        return self._cost_tracker.add_usage(input_tokens, output_tokens)
+
     def shutdown(self, wait: bool = True, timeout: Optional[float] = None) -> None:
         """
         Shutdown the worker gracefully.
@@ -201,6 +298,10 @@ class BaseWorker(threading.Thread):
 
         if wait:
             self.join(timeout=timeout)
+
+        # Print cost summary on shutdown
+        if self._cost_tracker.request_count > 0:
+            print(f"[{self.name}] Cost summary: {self._cost_tracker.get_summary()}")
 
     def get_status(self) -> dict:
         """Get the current status of the worker."""

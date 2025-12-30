@@ -201,7 +201,7 @@ class SummarizationWorker(BaseWorker):
             dump_summarization_response: Whether to dump summarization responses to JSON
         """
         rpm, tpm = get_rate_limit_config('SUMMARIZATION')
-        super().__init__(name='SummarizationWorker', rpm=rpm, tpm=tpm)
+        super().__init__(name='SummarizationWorker', rpm=rpm, tpm=tpm, pricing_prefix='SUMMARIZATION')
 
         self._dump_dir = dump_dir
         self._dump_summarization_response = dump_summarization_response
@@ -281,10 +281,16 @@ class SummarizationWorker(BaseWorker):
         # Clean inline math formulas to fix rendering issues
         content = _clean_inline_math(content)
 
+        # Track usage and cost
         if not response.usage:
             print(f'Summarization Done for text, length: {len(content)}')
         else:
-            print(f'Summarization Done for text, length: {len(content)}, usage: {response.usage.total_tokens}')
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
+            cost = self._track_usage(input_tokens, output_tokens)
+            cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
+            print(f'Summarization Done for text, length: {len(content)}, '
+                  f'usage: {input_tokens} in + {output_tokens} out = {response.usage.total_tokens} total, cost: {cost_str}')
 
         if self._dump_summarization_response:
             dump_file_path = self._dump_dir.joinpath(f'Summarization_{time.strftime("%Y_%m_%d-%H_%M_%S")}.json')

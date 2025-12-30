@@ -182,7 +182,7 @@ class OCRWorker(BaseWorker):
             max_retries: Maximum number of retries for failed OCR attempts
         """
         rpm, tpm = get_rate_limit_config('OCR')
-        super().__init__(name='OCRWorker', rpm=rpm, tpm=tpm)
+        super().__init__(name='OCRWorker', rpm=rpm, tpm=tpm, pricing_prefix='OCR')
 
         self._dump_dir = dump_dir
         self._dump_ocr_response = dump_ocr_response
@@ -322,10 +322,16 @@ class OCRWorker(BaseWorker):
 
                 token_count = response.usage.total_tokens if response.usage else estimate_tokens(len(content))
 
-                if not response.usage:
-                    print(f'OCR Done for image: {image_path}, length: {len(content)}')
+                # Track usage and cost
+                if response.usage:
+                    input_tokens = response.usage.prompt_tokens
+                    output_tokens = response.usage.completion_tokens
+                    cost = self._track_usage(input_tokens, output_tokens)
+                    cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
+                    print(f'OCR Done for image: {image_path}, length: {len(content)}, '
+                          f'usage: {input_tokens} in + {output_tokens} out = {token_count} total, cost: {cost_str}')
                 else:
-                    print(f'OCR Done for image: {image_path}, length: {len(content)}, usage: {token_count}')
+                    print(f'OCR Done for image: {image_path}, length: {len(content)}')
 
                 # Create structured result
                 result = OCRResult(

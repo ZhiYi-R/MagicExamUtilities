@@ -36,7 +36,7 @@ class AskAIWorker(BaseWorker):
             dump_ask_ai_response: Whether to dump Ask AI responses to JSON
         """
         rpm, tpm = get_rate_limit_config('ASK_AI')
-        super().__init__(name='AskAIWorker', rpm=rpm, tpm=tpm)
+        super().__init__(name='AskAIWorker', rpm=rpm, tpm=tpm, pricing_prefix='ASK_AI')
 
         self._cache_dir = cache_dir
         self._dump_dir = cache_dir.joinpath('ask_ai')
@@ -79,6 +79,39 @@ class AskAIWorker(BaseWorker):
         self._methods = {
             'ask': self._ask,
         }
+
+    def _track_langchain_usage(self, response, call_type: str) -> None:
+        """
+        Track usage from LangChain response.
+
+        Args:
+            response: LangChain ChatMessage response
+            call_type: Type of call ('initial', 'final', 'direct')
+        """
+        # LangChain may store usage in different places depending on version
+        input_tokens = 0
+        output_tokens = 0
+
+        # Try usage_metadata first (newer LangChain versions)
+        if hasattr(response, 'usage_metadata'):
+            usage = response.usage_metadata
+            if usage:
+                input_tokens = usage.get('input_tokens', 0)
+                output_tokens = usage.get('output_tokens', 0)
+
+        # Try response_metadata as fallback
+        elif hasattr(response, 'response_metadata'):
+            metadata = response.response_metadata
+            if 'token_usage' in metadata:
+                token_usage = metadata['token_usage']
+                input_tokens = token_usage.get('prompt_tokens', 0)
+                output_tokens = token_usage.get('completion_tokens', 0)
+
+        # Track usage if tokens were found
+        if input_tokens > 0 or output_tokens > 0:
+            cost = self._track_usage(input_tokens, output_tokens)
+            cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
+            print(f'[AskAIWorker] {call_type} call - usage: {input_tokens} in + {output_tokens} out, cost: {cost_str}')
 
     def _ask(self, question: str, kb_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
         """
@@ -150,9 +183,15 @@ class AskAIWorker(BaseWorker):
                 final_response = self._llm.invoke(messages)
                 answer = final_response.content
 
+                # Track costs for both calls (initial + final)
+                self._track_langchain_usage(response, 'initial')
+                self._track_langchain_usage(final_response, 'final')
+
             else:
                 # No tool calls needed, direct answer
                 answer = response.content
+                # Track costs for single call
+                self._track_langchain_usage(response, 'direct')
 
         except Exception as e:
             print(f'[AskAIWorker] Tool calling failed: {e}')
@@ -171,6 +210,14 @@ class AskAIWorker(BaseWorker):
                     raise RuntimeError('No response from API')
 
                 answer = api_response.choices[0].message.content
+
+                # Track costs for fallback API call
+                if api_response.usage:
+                    input_tokens = api_response.usage.prompt_tokens
+                    output_tokens = api_response.usage.completion_tokens
+                    cost = self._track_usage(input_tokens, output_tokens)
+                    cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
+                    print(f'[AskAIWorker] Fallback API call - usage: {input_tokens} in + {output_tokens} out, cost: {cost_str}')
 
             except Exception as e2:
                 print(f'[AskAIWorker] Direct API call also failed: {e2}')
