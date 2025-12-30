@@ -130,14 +130,14 @@ class AskAIWorker(BaseWorker):
         elif not found_usage:
             logger.warning(f'[AskAIWorker] {call_type} call - LangChain response did not include usage information, cost tracking disabled for this request')
 
-    def _ask(self, question: str, kb_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
+    def _ask(self, question: str, kb_id: Optional[str] = None, _timeout: Optional[float] = None) -> str:
         """
         Process a question with tool calling.
 
         Args:
             question: User's question
             kb_id: Optional knowledge base ID for scoped search
-            timeout: Maximum time to wait for result
+            _timeout: Maximum time to wait for API calls (internal parameter)
 
         Returns:
             Answer to the question
@@ -221,6 +221,7 @@ class AskAIWorker(BaseWorker):
                         {'role': 'user', 'content': question}
                     ],
                     temperature=0.0,
+                    timeout=_timeout
                 )
 
                 if not api_response.choices:
