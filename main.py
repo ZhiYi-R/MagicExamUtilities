@@ -248,10 +248,12 @@ def main():
     parser = argparse.ArgumentParser(
         description='Generate study notes from PDFs or audio recordings using AI'
     )
+    parser.add_argument('--gui', action='store_true',
+                        help='Launch GUI mode')
     parser.add_argument('--type', type=str, choices=['pdf', 'audio'],
-                        help='Type of input file', required=True)
+                        help='Type of input file (required in CLI mode)')
     parser.add_argument('--input', type=str, nargs='+',
-                        help='Input files (supports wildcards)', required=True)
+                        help='Input files (supports wildcards) (required in CLI mode)')
     parser.add_argument('--dump', action='store_true',
                         help='Dump intermediate results to cache', default=True)
     parser.add_argument('--no-dump', dest='dump', action='store_false',
@@ -259,9 +261,25 @@ def main():
     parser.add_argument('--dump-dir', type=str,
                         help='Cache directory', default='./cache/')
     parser.add_argument('--output', type=str,
-                        help='Output directory', required=True)
+                        help='Output directory (required in CLI mode)')
 
     args = parser.parse_args()
+
+    # GUI mode
+    if args.gui:
+        from gui import GradioApp
+        port = int(os.environ.get('GRADIO_PORT', 7860))
+        app = GradioApp(dump_dir=Path(args.dump_dir))
+        app.launch(server_port=port)
+        return
+
+    # CLI mode - validate required arguments
+    if not args.type:
+        parser.error('--type is required in CLI mode (or use --gui for GUI mode)')
+    if not args.input:
+        parser.error('--input is required in CLI mode (or use --gui for GUI mode)')
+    if not args.output:
+        parser.error('--output is required in CLI mode (or use --gui for GUI mode)')
 
     # Validate input files
     files = validate_files(args.input, args.type)

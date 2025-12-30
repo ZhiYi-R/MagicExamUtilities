@@ -35,15 +35,29 @@ uv pip install -e .
 
 4. 运行项目：
 
+### GUI 模式 (推荐)
+
+```bash
+python main.py --gui
 ```
+
+GUI 模式将在浏览器中打开 Web 界面，提供更友好的用户体验：
+- 支持拖拽上传文件
+- 实时进度显示
+- 结果预览和下载
+
+### CLI 模式
+
+```bash
 python main.py --type [audio|pdf] --input [input_files] --output [output_dir]
 ```
 
 | 参数 | 描述 |
 | --- | --- |
-| --type | 输入文件类型，可选值为audio和pdf (必需) |
-| --input | 输入文件路径，支持通配符 (必需) |
-| --output | 输出目录 (必需) |
+| --gui | 启动 GUI 模式 |
+| --type | 输入文件类型，可选值为audio和pdf (CLI 模式必需) |
+| --input | 输入文件路径，支持通配符 (CLI 模式必需) |
+| --output | 输出目录 (CLI 模式必需) |
 | --dump | 是否将中间结果保存到cache中 (默认: True) |
 | --no-dump | 不保存中间结果 |
 | --dump-dir | cache目录 (默认: ./cache/) |
@@ -66,6 +80,27 @@ python main.py --type [audio|pdf] --input [input_files] --output [output_dir]
 [https://api.siliconflow.cn/v1/audio/transcriptions](https://api.siliconflow.cn/v1/audio/transcriptions)
 
 ## Changelog
+
+### [0.6.0] - 2024-12-30
+
+**新增：Gradio Web GUI**
+- 新增 `gui.py`：基于 Gradio 的 Web 图形界面
+- main.py 新增 `--gui` 参数，启动 GUI 模式
+- GUI 提供 PDF 和音频处理的友好界面
+- 支持文件拖拽上传、实时进度显示、结果预览和下载
+
+**架构变更：**
+- `gui.py`: GradioApp 类，管理 GUI 生命周期和 Worker 初始化
+- `main.py`: 支持 GUI/CLI 双模式启动
+
+**使用方式：**
+```bash
+# GUI 模式 (推荐)
+python main.py --gui
+
+# CLI 模式
+python main.py --type pdf --input *.pdf --output ./output
+```
 
 ### [0.5.0] - 2024-12-30
 
