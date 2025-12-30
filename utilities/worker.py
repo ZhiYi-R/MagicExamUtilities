@@ -9,6 +9,8 @@ import uuid
 from queue import Queue, Empty
 from typing import Any, Callable, Optional, Dict, Tuple, Type
 from dataclasses import dataclass, field
+from functools import wraps
+import concurrent.futures
 
 from .rate_limiter import RateLimiter
 
@@ -93,6 +95,7 @@ class Task:
     args: tuple
     kwargs: dict
     future: 'Future'
+    timeout: Optional[float] = None  # Timeout for this specific task (None = use worker default)
 
 
 class Future:
@@ -141,6 +144,48 @@ class Future:
         return self._event.is_set()
 
 
+class WorkerTimeoutError(TimeoutError):
+    """Timeout error raised by worker task methods."""
+    pass
+
+
+def with_timeout(timeout_seconds: Optional[float]):
+    """
+    Decorator to add timeout handling to worker task methods.
+
+    This uses a thread pool to execute the function with a timeout.
+    If the function times out, a WorkerTimeoutError is raised which
+    can be caught and retried by the worker's retry mechanism.
+
+    Args:
+        timeout_seconds: Timeout in seconds (None = no timeout)
+
+    Returns:
+        Decorated function
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if timeout_seconds is None:
+                # No timeout, execute directly
+                return func(*args, **kwargs)
+
+            # Use ThreadPoolExecutor to enforce timeout
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(func, *args, **kwargs)
+                try:
+                    return future.result(timeout=timeout_seconds)
+                except concurrent.futures.TimeoutError:
+                    # Cancel the future if still running
+                    future.cancel()
+                    raise WorkerTimeoutError(
+                        f"Task {func.__name__} timed out after {timeout_seconds} seconds"
+                    )
+
+        return wrapper
+    return decorator
+
+
 class BaseWorker(threading.Thread):
     """
     Base worker class for async task processing.
@@ -166,7 +211,8 @@ class BaseWorker(threading.Thread):
                  poll_interval: float = 0.1,
                  pricing_prefix: Optional[str] = None,
                  max_retries: int = 0,
-                 retry_delay: float = 1.0):
+                 retry_delay: float = 1.0,
+                 task_timeout: Optional[float] = None):
         """
         Initialize the worker.
 
@@ -178,6 +224,7 @@ class BaseWorker(threading.Thread):
             pricing_prefix: Prefix for pricing env vars (e.g., 'OCR', 'SUMMARIZATION')
             max_retries: Maximum number of retries for failed tasks (0 = no retry)
             retry_delay: Delay between retries in seconds
+            task_timeout: Timeout for individual task execution in seconds (None = no timeout)
         """
         super().__init__(daemon=True, name=name)
         self._queue: Queue[Task] = Queue()
@@ -187,6 +234,7 @@ class BaseWorker(threading.Thread):
         self._methods: Dict[str, Callable] = {}
         self._max_retries = max_retries
         self._retry_delay = retry_delay
+        self._task_timeout = task_timeout
 
         # Statistics for retries
         self._total_retries: int = 0
@@ -270,10 +318,38 @@ class BaseWorker(threading.Thread):
             method=method,
             args=args,
             kwargs=kwargs,
-            future=future
+            future=future,
+            timeout=kwargs.pop('_task_timeout', None)  # Extract timeout from kwargs
         )
         self._queue.put(task)
         return future
+
+    def _execute_task_with_timeout(self, task: Task, timeout: Optional[float]) -> Any:
+        """
+        Execute a task with optional timeout.
+
+        Args:
+            task: The task to execute
+            timeout: Optional timeout in seconds (None = use worker default)
+
+        Returns:
+            The result of the task execution
+
+        Raises:
+            WorkerTimeoutError: If the task times out
+        """
+        if task.method not in self._methods:
+            raise ValueError(f"Unknown method: {task.method}")
+
+        method = self._methods[task.method]
+
+        # Use provided timeout or fall back to worker default
+        effective_timeout = timeout if timeout is not None else self._task_timeout
+
+        if effective_timeout is not None:
+            return self._execute_with_timeout(method, task.args, task.kwargs, effective_timeout)
+        else:
+            return method(*task.args, **task.kwargs)
 
     def _execute_task_with_retry(self, task: Task) -> None:
         """
@@ -286,11 +362,8 @@ class BaseWorker(threading.Thread):
 
         for attempt in range(self._max_retries + 1):
             try:
-                if task.method not in self._methods:
-                    raise ValueError(f"Unknown method: {task.method}")
-
-                method = self._methods[task.method]
-                result = method(*task.args, **task.kwargs)
+                # Execute with timeout (uses task.timeout or worker default)
+                result = self._execute_task_with_timeout(task, task.timeout)
 
                 # Success!
                 if attempt > 0:
@@ -313,6 +386,32 @@ class BaseWorker(threading.Thread):
                     self._total_failures += 1
                     task.future.set_exception(e)
                     return
+
+    def _execute_with_timeout(self, method: Callable, args: tuple, kwargs: dict, timeout: float) -> Any:
+        """
+        Execute a method with timeout.
+
+        Args:
+            method: The method to execute
+            args: Positional arguments
+            kwargs: Keyword arguments
+            timeout: Timeout in seconds
+
+        Returns:
+            The result of the method call
+
+        Raises:
+            WorkerTimeoutError: If the method times out
+        """
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(method, *args, **kwargs)
+            try:
+                return future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                raise WorkerTimeoutError(
+                    f"Task {method.__name__} timed out after {timeout} seconds"
+                )
 
     def run(self) -> None:
         """Main worker loop."""
@@ -397,6 +496,25 @@ class BaseWorker(threading.Thread):
             'queue_size': self._queue.qsize(),
             'rate_limiter': self._rate_limiter.get_status(),
         }
+
+    def get_cost_tracker(self) -> CostTracker:
+        """Get the current cost tracker state."""
+        return self._cost_tracker
+
+    def get_cost_summary(self) -> str:
+        """Get a formatted summary of current costs."""
+        return self._cost_tracker.get_summary()
+
+    def get_model_name(self) -> str:
+        """
+        Get the model name used by this worker.
+
+        Subclasses should override this to return their specific model name.
+
+        Returns:
+            Model name or empty string if not configured
+        """
+        return ""
 
 
 def get_rate_limit_config(prefix: str) -> tuple:

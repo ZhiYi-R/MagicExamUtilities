@@ -18,16 +18,18 @@ class STTWorker(BaseWorker):
 
     def __init__(self,
                  dump_dir: pathlib.Path = pathlib.Path('.'),
-                 dump_stt_response: bool = True):
+                 dump_stt_response: bool = True,
+                 task_timeout: Optional[float] = None):
         """
         Initialize the STT worker.
 
         Args:
             dump_dir: Directory to dump STT responses
             dump_stt_response: Whether to dump STT responses to JSON
+            task_timeout: Timeout for individual STT tasks in seconds (None = no timeout)
         """
         rpm, tpm = get_rate_limit_config('ASR')
-        super().__init__(name='STTWorker', rpm=rpm, tpm=tpm)
+        super().__init__(name='STTWorker', rpm=rpm, tpm=tpm, task_timeout=task_timeout)
 
         self._dump_dir = dump_dir
         self._dump_stt_response = dump_stt_response
@@ -46,6 +48,10 @@ class STTWorker(BaseWorker):
         self._methods = {
             'stt': self._stt,
         }
+
+    def get_model_name(self) -> str:
+        """Get the model name used by this worker."""
+        return self._model
 
     def _stt(self, audio_path: pathlib.Path) -> str:
         """Process an audio file with STT."""
@@ -90,13 +96,13 @@ class STTWorker(BaseWorker):
 
         Args:
             audio_path: Path to the audio file
-            timeout: Maximum time to wait for result (seconds)
+            timeout: Maximum time to wait for result (seconds) - enforced at worker level
 
         Returns:
             Transcribed text
         """
-        future = self.submit('stt', audio_path)
-        return future.get(timeout=timeout)
+        future = self.submit('stt', audio_path, _task_timeout=timeout)
+        return future.get()
 
     def process_audios(self, audio_paths: list[pathlib.Path], timeout_per_audio: Optional[float] = None) -> list[str]:
         """
@@ -104,7 +110,7 @@ class STTWorker(BaseWorker):
 
         Args:
             audio_paths: List of paths to audio files
-            timeout_per_audio: Maximum time to wait per audio file (seconds)
+            timeout_per_audio: Maximum time to wait per audio file (seconds) - enforced at worker level
 
         Returns:
             List of transcribed texts

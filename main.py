@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from pdf2image import convert_from_path
 
 from utilities.workers import OCRWorker, STTWorker, SummarizationWorker, TextSource, AskAIWorker
-from utilities.cache import OCRCache
+from utilities.cache import OCRCache, STTCache
 
 
 # Global workers for cleanup
@@ -80,19 +80,36 @@ def validate_files(file_paths: list[str], file_type: str) -> list[Path]:
     return valid_files
 
 
-def convert_pdf_to_images(pdf_path: Path, dump_dir: Path) -> list[Path]:
+def convert_pdf_to_images(pdf_path: Path, cache: OCRCache) -> list[Path]:
     """
     Convert a PDF file to images.
 
-    Args:
-        pdf_path: Path to the PDF file
-        dump_dir: Directory to save the images
+    Images are saved in the PDF's cache directory. If images already exist,
+    they are reused to avoid redundant conversion.
 
     Returns:
-        List of paths to the generated images
+        Tuple of (image_paths, converted) where converted is True if PDF was
+        actually converted, False if existing images were reused.
     """
+    # Get the cache directory for this PDF
+    image_dir = cache.get_pdf_cache_dir(pdf_path)
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    # First, try to find existing images
+    existing_images = list(image_dir.glob('page_*.jpg'))
+    if existing_images:
+        # Sort by page number (extract from filename)
+        def get_page_number(path):
+            try:
+                return int(path.stem.split('_')[-1])
+            except (ValueError, IndexError):
+                return 0
+        existing_images = sorted(existing_images, key=get_page_number)
+        print(f'[Main] Found {len(existing_images)} existing images, reusing them')
+        return existing_images, False
+
+    # No existing images, convert PDF
     print(f'[Main] Converting PDF to images: {pdf_path}')
-    dump_dir.mkdir(parents=True, exist_ok=True)
 
     images = convert_from_path(
         pdf_path=pdf_path,
@@ -103,17 +120,21 @@ def convert_pdf_to_images(pdf_path: Path, dump_dir: Path) -> list[Path]:
 
     image_paths = []
     for i, image in enumerate(images):
-        image_path = dump_dir.joinpath(f'{pdf_path.stem}_{i}.jpg')
+        image_path = image_dir.joinpath(f'page_{i}.jpg')
         image.save(image_path, 'JPEG')
         print(f'[Main] Dumped image: {image_path}')
         image_paths.append(image_path)
 
-    return image_paths
+    return image_paths, True
 
 
 def process_pdf_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_dir: Path) -> None:
     """
     Process PDF files through the OCR + Summarization pipeline.
+
+    Uses page-level caching for resumability: each page's OCR result is cached
+    independently using its image hash as the key. If processing is interrupted,
+    it can resume from the last incomplete page.
 
     Args:
         files: List of PDF files to process
@@ -141,7 +162,7 @@ def process_pdf_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_d
     for pdf_path in files:
         print(f'[Main] Processing PDF: {pdf_path.name}')
 
-        # Check cache first
+        # Try to load full PDF cache first (fast path for unchanged PDFs)
         cached = ocr_cache.get_pdf_cache(pdf_path)
         if cached:
             print(f'[Main] Using cached OCR results for {pdf_path.name}')
@@ -149,22 +170,42 @@ def process_pdf_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_d
             full_text += cached.full_text
             continue
 
-        # Convert PDF to images
-        pdf_dump_path = dump_dir.joinpath(pdf_path.stem)
-        image_paths = convert_pdf_to_images(pdf_path, pdf_dump_path)
-        print(f'[Main] Converted {pdf_path.name} to {len(image_paths)} image(s)')
+        # PDF cache miss - convert to images and process page by page
+        image_paths, converted = convert_pdf_to_images(pdf_path, ocr_cache)
+        if converted:
+            print(f'[Main] Converted {pdf_path.name} to {len(image_paths)} image(s)')
+        else:
+            print(f'[Main] Reusing {len(image_paths)} existing images for {pdf_path.name}')
 
-        # Process images with structured OCR
-        print(f'[Main] Processing {len(image_paths)} image(s) with OCR...')
-        page_results = _ocr_worker.process_images_structured(image_paths, timeout_per_image=300)
+        # Process each page with page-level caching (allows resuming from interruption)
+        page_results = []
+        pdf_text_parts = []
 
-        # Extract full text from results
-        pdf_text = ''.join([r.raw_text for r in page_results])
+        for i, image_path in enumerate(image_paths):
+            # Check page-level cache first (uses image hash as key)
+            cached_page = ocr_cache.get_page_cache(image_path)
+            if cached_page:
+                print(f'[Main] Using cached OCR result for page {i}')
+                page_results.append(cached_page)
+                pdf_text_parts.append(cached_page.raw_text)
+                continue
+
+            # Page cache miss - process with OCR
+            print(f'[Main] OCR page {i}/{len(image_paths)}')
+            result = _ocr_worker.process_image_structured(image_path, timeout=300)
+            page_results.append(result)
+            pdf_text_parts.append(result.raw_text)
+
+            # Save page-level cache immediately (for resumability)
+            ocr_cache.save_page_cache(result)
+
+        # Combine results
+        pdf_text = ''.join(pdf_text_parts)
         full_text += pdf_text
         all_page_results.extend(page_results)
         print(f'[Main] OCR complete for {pdf_path.name}. Text length: {len(pdf_text)} characters')
 
-        # Save to cache
+        # Save full PDF cache for future fast access
         ocr_cache.save_pdf_cache(pdf_path, page_results, pdf_text)
 
     print(f'[Main] All OCR complete. Total text length: {len(full_text)} characters')
@@ -184,9 +225,14 @@ def process_pdf_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_d
     summary = _summarization_worker.summarize(full_text, timeout=600)
     print(f'[Main] Summarization complete. Summary length: {len(summary)} characters')
 
+    # Generate title from summary
+    print('[Main] Generating title...')
+    title = _summarization_worker.generate_title(summary, timeout=60)
+    print(f'[Main] Title generated: {title}')
+
     # Write output
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir.joinpath(f'{time.strftime("%Y_%m_%d-%H_%M_%S")}.md')
+    output_file = output_dir.joinpath(f'{title}.md')
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(summary)
     print(f'[Main] Output written to: {output_file}')
@@ -194,7 +240,7 @@ def process_pdf_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_d
 
 def process_audio_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_dir: Path) -> None:
     """
-    Process audio files through the STT + Summarization pipeline.
+    Process audio files through the STT + Transcript Correction + Summarization pipeline.
 
     Args:
         files: List of audio files to process
@@ -206,19 +252,35 @@ def process_audio_pipeline(files: list[Path], dump_dir: Path, dump: bool, output
 
     print(f'[Main] Starting STT summarization for {len(files)} audio file(s)')
 
+    # Initialize cache manager
+    stt_cache = STTCache(cache_dir=dump_dir)
+
     # Step 1: Initialize and start STT worker
     stt_dump_path = dump_dir.joinpath('stt')
     stt_dump_path.mkdir(parents=True, exist_ok=True)
     _stt_worker = STTWorker(dump_dir=stt_dump_path, dump_stt_response=dump)
     _stt_worker.start()
 
-    # Step 2: Process audio files with STT
+    # Step 2: Process audio files with STT (using cache when available)
     print(f'[Main] Processing {len(files)} audio file(s) with STT...')
     full_text = ''
     for i, audio in enumerate(files, 1):
         print(f'[Main] STT progress: {i}/{len(files)} - {audio.name}')
-        text = _stt_worker.process_audio(audio, timeout=600)
+
+        # Check cache first
+        cached = stt_cache.get_audio_cache(audio)
+        if cached:
+            print(f'[Main] Using cached STT results for {audio.name}')
+            full_text += cached.raw_text
+            continue
+
+        # 30 minutes timeout for large audio files (1800 seconds)
+        text = _stt_worker.process_audio(audio, timeout=1800)
         full_text += text
+
+        # Save to cache
+        stt_cache.save_audio_cache(audio, text)
+
     print(f'[Main] STT complete. Total text length: {len(full_text)} characters')
 
     # Step 3: Initialize and start Summarization worker
@@ -231,17 +293,36 @@ def process_audio_pipeline(files: list[Path], dump_dir: Path, dump: bool, output
     )
     _summarization_worker.start()
 
-    # Step 4: Summarize the text
+    # Step 4: Correct the transcript
+    print('[Main] Correcting transcript...')
+    corrected_transcript = _summarization_worker.correct_transcript(full_text, timeout=600)
+    print(f'[Main] Transcript correction complete. Corrected length: {len(corrected_transcript)} characters')
+
+    # Step 5: Summarize the corrected text
     print('[Main] Summarizing text...')
-    summary = _summarization_worker.summarize(full_text, timeout=600)
+    summary = _summarization_worker.summarize(corrected_transcript, timeout=600)
     print(f'[Main] Summarization complete. Summary length: {len(summary)} characters')
 
-    # Step 5: Write output
+    # Step 6: Generate title from summary
+    print('[Main] Generating title...')
+    title = _summarization_worker.generate_title(summary, timeout=60)
+    print(f'[Main] Title generated: {title}')
+
+    # Step 7: Write outputs (both corrected transcript and summary)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir.joinpath(f'{time.strftime("%Y_%m_%d-%H_%M_%S")}.md')
-    with open(output_file, 'w', encoding='utf-8') as f:
+    timestamp = time.strftime("%Y_%m_%d-%H_%M_%S")
+
+    # Save corrected transcript (keep timestamp for transcript as it's the raw output)
+    transcript_file = output_dir.joinpath(f'{timestamp}_transcript.md')
+    with open(transcript_file, 'w', encoding='utf-8') as f:
+        f.write(corrected_transcript)
+    print(f'[Main] Corrected transcript written to: {transcript_file}')
+
+    # Save summary with AI-generated title
+    summary_file = output_dir.joinpath(f'{title}.md')
+    with open(summary_file, 'w', encoding='utf-8') as f:
         f.write(summary)
-    print(f'[Main] Output written to: {output_file}')
+    print(f'[Main] Summary written to: {summary_file}')
 
 
 def process_ask_pipeline(question: str, dump_dir: Path) -> None:

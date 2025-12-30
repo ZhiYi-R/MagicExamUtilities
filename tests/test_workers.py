@@ -459,3 +459,71 @@ class TestSummarizationWorker:
         assert len(dump_files) >= 1
 
         worker.shutdown(wait=True, timeout=2.0)
+
+    @patch('utilities.workers.summarization_worker.get_rate_limit_config')
+    def test_summarization_worker_generate_title(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test generating a title from content."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = SummarizationWorker(
+            text_source=TextSource.OCR,
+            dump_dir=temp_dir,
+            dump_summarization_response=True
+        )
+        worker.start()
+
+        # Content with headings
+        content = """# 数据库系统概论
+
+## 第一章 关系数据库
+
+### 1.1 关系模型
+
+关系数据库是基于关系模型的数据库系统。
+
+### 1.2 SQL 语言
+
+SQL 是结构化查询语言。
+
+## 第二章 数据库设计
+
+数据库设计是创建有效数据库结构的过程。
+"""
+        result = worker.generate_title(content, timeout=5.0)
+        assert result == "Test response"  # Mock response
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    @patch('utilities.workers.summarization_worker.get_rate_limit_config')
+    def test_summarization_worker_generate_title_no_headings(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test generating a title from content without headings."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = SummarizationWorker(
+            text_source=TextSource.STT,
+            dump_dir=temp_dir,
+            dump_summarization_response=True
+        )
+        worker.start()
+
+        # Content without headings
+        content = """今天我们来讲一下计算机网络的基本概念。计算机网络是指将地理位置不同的计算机，
+通过通信线路连接起来，实现资源共享和信息传递的系统。主要分为局域网、城域网和广域网。
+"""
+        result = worker.generate_title(content, timeout=5.0)
+        assert result  # Should return a non-empty string
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    @patch('utilities.workers.summarization_worker.get_rate_limit_config')
+    def test_summarization_worker_generate_title_registers_method(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test that generate_title method is registered."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = SummarizationWorker(
+            text_source=TextSource.OCR,
+            dump_dir=temp_dir,
+            dump_summarization_response=True
+        )
+
+        assert 'generate_title' in worker._methods

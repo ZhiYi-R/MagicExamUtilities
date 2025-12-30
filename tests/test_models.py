@@ -128,6 +128,7 @@ class TestOCRResult:
             file_path="/test/image.jpg",
             file_hash="abc123",
             page_number=0,
+            page_hash="page_hash_abc",
             timestamp="2024-12-30T00:00:00",
             raw_text="Title\n\nContent",
             sections=sections,
@@ -137,6 +138,7 @@ class TestOCRResult:
         assert result.file_path == "/test/image.jpg"
         assert result.file_hash == "abc123"
         assert result.page_number == 0
+        assert result.page_hash == "page_hash_abc"
         assert result.raw_text == "Title\n\nContent"
         assert len(result.sections) == 2
         assert result.char_count == 14
@@ -151,6 +153,7 @@ class TestOCRResult:
             file_path="/test/image.jpg",
             file_hash="abc123",
             page_number=0,
+            page_hash="page_hash_abc",
             timestamp="2024-12-30T00:00:00",
             raw_text="Title",
             sections=sections,
@@ -161,6 +164,7 @@ class TestOCRResult:
         assert data['file_path'] == "/test/image.jpg"
         assert data['file_hash'] == "abc123"
         assert data['page_number'] == 0
+        assert data['page_hash'] == "page_hash_abc"
         assert data['raw_text'] == "Title"
         assert len(data['sections']) == 1
         assert data['char_count'] == 5
@@ -184,6 +188,7 @@ class TestOCRResult:
         assert result.file_path == '/test/image.jpg'
         assert result.file_hash == 'abc123'
         assert result.page_number == 0
+        assert result.page_hash is not None  # page_hash is computed from raw_text
         assert result.raw_text == 'Title'
         assert len(result.sections) == 1
         assert result.sections[0].type == SectionType.HEADING
@@ -198,6 +203,7 @@ class TestOCRResult:
             file_path="/test/image.jpg",
             file_hash="abc123",
             page_number=1,
+            page_hash="page_hash_xyz",
             timestamp="2024-12-30T00:00:00",
             raw_text="Title\n\nContent",
             sections=sections,
@@ -209,6 +215,7 @@ class TestOCRResult:
         assert restored.file_path == original.file_path
         assert restored.file_hash == original.file_hash
         assert restored.page_number == original.page_number
+        assert restored.page_hash == original.page_hash
         assert restored.raw_text == original.raw_text
         assert len(restored.sections) == len(original.sections)
         assert restored.char_count == original.char_count
@@ -223,6 +230,7 @@ class TestOCRResult:
             file_path="/test/image.jpg",
             file_hash="abc123",
             page_number=0,
+            page_hash="page_hash_test",
             timestamp="2024-12-30T00:00:00",
             raw_text="Title",
             sections=sections,
@@ -240,6 +248,7 @@ class TestOCRResult:
         assert loaded.file_path == original.file_path
         assert loaded.file_hash == original.file_hash
         assert loaded.page_number == original.page_number
+        assert loaded.page_hash == original.page_hash
         assert loaded.raw_text == original.raw_text
         assert len(loaded.sections) == len(original.sections)
 
@@ -254,6 +263,7 @@ class TestPDFCache:
                 file_path="/test/page_0.jpg",
                 file_hash="hash1",
                 page_number=0,
+                page_hash="page_hash_1",
                 timestamp="2024-12-30T00:00:00",
                 raw_text="Page 1",
                 sections=[],
@@ -264,6 +274,7 @@ class TestPDFCache:
                 file_path="/test/page_1.jpg",
                 file_hash="hash2",
                 page_number=1,
+                page_hash="page_hash_2",
                 timestamp="2024-12-30T00:00:00",
                 raw_text="Page 2",
                 sections=[],
@@ -290,6 +301,7 @@ class TestPDFCache:
                 file_path="/test/page_0.jpg",
                 file_hash="hash1",
                 page_number=0,
+                page_hash="page_hash_1",
                 timestamp="2024-12-30T00:00:00",
                 raw_text="Page 1",
                 sections=[],
@@ -343,6 +355,7 @@ class TestPDFCache:
                 file_path="/test/page_0.jpg",
                 file_hash="hash1",
                 page_number=0,
+                page_hash="page_hash_1",
                 timestamp="2024-12-30T00:00:00",
                 raw_text="Page 1",
                 sections=[],
@@ -373,6 +386,7 @@ class TestPDFCache:
                 file_path="/test/page_0.jpg",
                 file_hash="hash1",
                 page_number=0,
+                page_hash="page_hash_1",
                 timestamp="2024-12-30T00:00:00",
                 raw_text="Page 1",
                 sections=[],

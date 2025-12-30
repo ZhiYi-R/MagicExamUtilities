@@ -30,19 +30,21 @@ class AskAIWorker(BaseWorker):
 
     def __init__(self,
                  cache_dir: Path = Path('./cache'),
-                 dump_ask_ai_response: bool = True):
+                 dump_ask_ai_response: bool = True,
+                 task_timeout: Optional[float] = None):
         """
         Initialize the Ask AI worker.
 
         Args:
             cache_dir: Directory for cache and dumps
             dump_ask_ai_response: Whether to dump Ask AI responses to JSON
+            task_timeout: Timeout for individual ask tasks in seconds (None = no timeout)
         """
         rpm, tpm = get_rate_limit_config('ASK_AI')
         max_retries, retry_delay = get_retry_config('ASK_AI')
 
         super().__init__(name='AskAIWorker', rpm=rpm, tpm=tpm, pricing_prefix='ASK_AI',
-                        max_retries=max_retries, retry_delay=retry_delay)
+                        max_retries=max_retries, retry_delay=retry_delay, task_timeout=task_timeout)
 
         self._cache_dir = cache_dir
         self._dump_dir = cache_dir.joinpath('ask_ai')
@@ -85,6 +87,10 @@ class AskAIWorker(BaseWorker):
         self._methods = {
             'ask': self._ask,
         }
+
+    def get_model_name(self) -> str:
+        """Get the model name used by this worker."""
+        return self._model
 
     def _track_langchain_usage(self, response, call_type: str) -> None:
         """
@@ -255,13 +261,13 @@ class AskAIWorker(BaseWorker):
         Args:
             question: User's question
             kb_id: Optional knowledge base ID for scoped search
-            timeout: Maximum time to wait for result
+            timeout: Maximum time to wait for result (seconds) - enforced at worker level
 
         Returns:
             Answer to the question
         """
-        future = self.submit('ask', question, kb_id)
-        return future.get(timeout=timeout)
+        future = self.submit('ask', question, kb_id, _task_timeout=timeout)
+        return future.get()
 
     def _estimate_tokens(self, task) -> int:
         """Estimate tokens for Ask AI requests."""

@@ -19,9 +19,10 @@ An AI-powered tool for final exam preparation that automatically generates study
 | **Audio Processing** | Generate study notes from review session recordings |
 | **Ask AI** | Answer questions based on processed content with knowledge base isolation |
 | **Knowledge Base Management** | Organize PDFs by subject with independent indexing and search |
-| **Smart Caching** | File hash-based caching to avoid redundant processing |
+| **Smart Caching** | File hash-based caching to avoid redundant processing (PDF+Audio) |
 | **Chunked Summarization** | Handle ultra-long texts beyond model context window limits |
 | **Cost Tracking** | Automatically track API usage and costs (optional configuration) |
+| **AI Title Generation** | Automatically extract titles from note content, generating meaningful filenames |
 
 ---
 
@@ -198,10 +199,12 @@ python main.py --type pdf --input file.pdf --output ./notes --dump-dir ./cache
 ### Q: Where are the cache files stored?
 
 **A:** By default in the `./cache/` directory, containing:
-- `ocr/` - OCR result cache
-- `stt/` - STT result cache
+- `ocr/` - OCR result cache (organized by PDF file hash)
+- `stt/` - STT result cache (organized by audio file hash)
 - `knowledge_bases.json` - Knowledge base configuration
 - `kb_indices/` - Knowledge base indices
+
+Cache is validated using MD5 hash of file content, automatically reprocessing when files are modified.
 
 ---
 
@@ -266,6 +269,43 @@ This project is open source under [GPL v3.0](https://www.gnu.org/licenses/gpl-3.
 ## Changelog
 
 See [Changelog](#changelog) section below.
+
+### [0.8.1] - 2024-12-31
+
+**Added: Page-Level Caching and Resume Support**
+- Added page-level caching feature, each page's OCR result is cached independently
+- Processing can resume from the last incomplete page after interruption
+- Supports two cache formats: OCRResult format (`.ocr.json`) and API dump format (`.json`)
+- PDF image export optimization: automatically detects and reuses existing images, avoiding redundant conversion
+- GUI mode now has the same caching and resume capabilities as CLI mode
+
+**Improved: Log Output**
+- Distinguished log messages between "converted" and "reused images"
+- Clear notification when page cache is hit
+
+**Tests:**
+- Overall test coverage 60% (176 tests passing)
+
+### [0.8.0] - 2024-12-30
+
+**Added: STT Cache Support**
+- Added `STTCache` class for file hash-based caching of audio processing
+- Added `AudioCache` data model for storing audio transcription results
+- `CacheLoader` now supports loading STT cache as knowledge base source
+- Audio processing pipeline now supports caching to avoid redundant transcription
+- STT request timeout increased from 10 minutes to 30 minutes for large file support
+
+**Added: AI Title Generation**
+- `SummarizationWorker` added `generate_title()` method
+- Automatically extracts headings from note content and uses AI to generate meaningful filenames
+- Supports title cleaning and filename sanitization
+- PDF and audio processing output files now use AI-generated descriptive titles instead of timestamps
+
+**Tests:**
+- Added STTCache unit tests (13 new tests)
+- Added AudioCache model tests (3 new tests)
+- Added generate_title method tests (3 new tests)
+- Overall test coverage 63% (176 tests passing)
 
 ### [0.7.3] - 2024-12-30
 

@@ -20,10 +20,13 @@ from utilities.models import OCRResult, PDFCache, OCRSection, SectionType
 @pytest.fixture
 def mock_cache_dir(temp_dir):
     """Create a mock cache directory with sample data."""
-    ocr_dir = temp_dir / 'ocr'
+    ocr_dir = temp_dir / 'ocr' / 'stored'
     ocr_dir.mkdir(parents=True)
 
-    # Create a sample PDF cache file
+    # Create a sample PDF cache file (new structure: ocr/stored/{pdf_hash}/cache.json)
+    pdf_hash_dir = ocr_dir / 'abc123'
+    pdf_hash_dir.mkdir(parents=True)
+
     cache_data = {
         'file_path': '/path/to/test.pdf',
         'file_hash': 'abc123',
@@ -43,11 +46,13 @@ def mock_cache_dir(temp_dir):
         'full_text': 'Sample content for testing'
     }
 
-    cache_file = ocr_dir / 'test.json'
+    cache_file = pdf_hash_dir / 'cache.json'
     with open(cache_file, 'w', encoding='utf-8') as f:
         json.dump(cache_data, f)
 
     # Create another cache file without page_results (single page OCR)
+    # Use legacy structure for this one
+    ocr_root_dir = temp_dir / 'ocr'
     page_data = {
         'file_path': '/path/to/page.jpg',
         'file_hash': 'def456',
@@ -59,12 +64,36 @@ def mock_cache_dir(temp_dir):
         'token_estimate': 8
     }
 
-    page_file = ocr_dir / 'page.json'
+    page_file = ocr_root_dir / 'page.json'
     with open(page_file, 'w', encoding='utf-8') as f:
         json.dump(page_data, f)
 
+    # Also create a legacy cache for test.pdf (to support stem-based lookup)
+    test_legacy_data = {
+        'file_path': '/path/to/test.pdf',
+        'file_hash': 'abc123',
+        'timestamp': '1234567890.0',
+        'page_results': [
+            {
+                'file_path': '/path/to/test.pdf',
+                'file_hash': 'abc123',
+                'page_number': 0,
+                'timestamp': '1234567890.0',
+                'raw_text': 'Sample content for testing',
+                'sections': [],
+                'char_count': 25,
+                'token_estimate': 10
+            }
+        ],
+        'full_text': 'Sample content for testing'
+    }
+
+    test_legacy_file = ocr_root_dir / 'test.json'
+    with open(test_legacy_file, 'w', encoding='utf-8') as f:
+        json.dump(test_legacy_data, f)
+
     # Create an invalid cache file
-    invalid_file = ocr_dir / 'invalid.json'
+    invalid_file = ocr_root_dir / 'invalid.json'
     invalid_file.write_text('invalid json content')
 
     return temp_dir
@@ -139,8 +168,11 @@ class TestCacheLoader:
 
     def test_get_sections_by_type(self, cache_loader, mock_cache_dir):
         """Test getting sections by type."""
-        # Create a cache with sections
-        ocr_dir = mock_cache_dir / 'ocr'
+        # Create a cache with sections (new structure: ocr/stored/{pdf_hash}/cache.json)
+        ocr_stored_dir = mock_cache_dir / 'ocr' / 'stored'
+        pdf_hash_dir = ocr_stored_dir / 'xyz789'
+        pdf_hash_dir.mkdir(parents=True)
+
         cache_data = {
             'file_path': '/path/to/sections.pdf',
             'file_hash': 'xyz789',
@@ -173,7 +205,7 @@ class TestCacheLoader:
             'full_text': 'Content with sections'
         }
 
-        cache_file = ocr_dir / 'sections.json'
+        cache_file = pdf_hash_dir / 'cache.json'
         with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump(cache_data, f)
 

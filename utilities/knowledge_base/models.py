@@ -14,7 +14,7 @@ class KnowledgeBase:
     """
     Knowledge base configuration.
 
-    A knowledge base groups related PDF documents together
+    A knowledge base groups related PDF documents and audio transcripts together
     for isolated retrieval.
 
     Attributes:
@@ -22,6 +22,7 @@ class KnowledgeBase:
         name: Display name (e.g., '数据库系统')
         description: Human-readable description
         pdf_files: List of PDF file names associated with this KB
+        audio_files: List of audio file names associated with this KB
         created_at: Creation timestamp
         updated_at: Last update timestamp
     """
@@ -29,6 +30,7 @@ class KnowledgeBase:
     name: str
     description: str
     pdf_files: List[str]
+    audio_files: List[str]
     created_at: str
     updated_at: str
 
@@ -39,6 +41,7 @@ class KnowledgeBase:
             'name': self.name,
             'description': self.description,
             'pdf_files': self.pdf_files,
+            'audio_files': self.audio_files,
             'created_at': self.created_at,
             'updated_at': self.updated_at,
         }
@@ -51,12 +54,13 @@ class KnowledgeBase:
             name=data['name'],
             description=data.get('description', ''),
             pdf_files=data.get('pdf_files', []),
+            audio_files=data.get('audio_files', []),
             created_at=data.get('created_at', ''),
             updated_at=data.get('updated_at', ''),
         )
 
     @classmethod
-    def create(cls, id: str, name: str, description: str = '', pdf_files: Optional[List[str]] = None) -> 'KnowledgeBase':
+    def create(cls, id: str, name: str, description: str = '', pdf_files: Optional[List[str]] = None, audio_files: Optional[List[str]] = None) -> 'KnowledgeBase':
         """
         Create a new knowledge base with timestamp.
 
@@ -65,6 +69,7 @@ class KnowledgeBase:
             name: Display name
             description: Description
             pdf_files: Associated PDF files
+            audio_files: Associated audio files
 
         Returns:
             New KnowledgeBase instance
@@ -76,6 +81,7 @@ class KnowledgeBase:
             name=name,
             description=description,
             pdf_files=pdf_files or [],
+            audio_files=audio_files or [],
             created_at=timestamp,
             updated_at=timestamp,
         )
@@ -93,6 +99,25 @@ class KnowledgeBase:
             self.pdf_files.remove(pdf_name)
             import time
             self.updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def add_audio(self, audio_name: str) -> None:
+        """Add an audio file to the knowledge base."""
+        if audio_name not in self.audio_files:
+            self.audio_files.append(audio_name)
+            import time
+            self.updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def remove_audio(self, audio_name: str) -> None:
+        """Remove an audio file from the knowledge base."""
+        if audio_name in self.audio_files:
+            self.audio_files.remove(audio_name)
+            import time
+            self.updated_at = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    @property
+    def has_content(self) -> bool:
+        """Check if knowledge base has any content."""
+        return bool(self.pdf_files or self.audio_files)
 
 
 class KnowledgeBaseStore:

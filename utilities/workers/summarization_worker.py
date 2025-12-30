@@ -191,10 +191,48 @@ class SummarizationWorker(BaseWorker):
 - 不使用代码块包裹整个输出
 - 确保可以直接保存为 .md 文件使用'''
 
+    # Transcript correction prompt - for correcting STT transcripts
+    _TRANSCRIPT_CORRECTION_PROMPT = r'''你是一个专业的文字编辑助手，负责将语音转录的文本纠错整理成规范、易读的文字稿。
+
+## 任务目标
+
+将口语化的语音转录文本纠错为规范、通顺的文字稿，保留完整内容和原意。
+
+## 输出要求
+
+### 文本纠错
+- **去除口语冗余**：删除"嗯"、"啊"、"那个"、"就是"等无意义的语气词
+- **修正语法错误**：修正时态、人称、语序等语法问题
+- **修正标点符号**：将语音识别的连续标点修正为正确的标点（句号、逗号、分号等）
+- **修正错别字**：根据上下文修正语音识别错误的同音字
+- **保留语义**：不改变原文的意思，不添加或删除实质性内容
+
+### 结构保持
+- 保持原始的段落结构
+- 保持老师的讲课逻辑顺序
+- 保留所有重要的讲解内容
+
+### 特殊处理
+- **保留重复强调**：如果老师重复强调某个知识点，保留重复内容
+- **保留口语表达**：保留"大家看"、"请注意"等与授课相关的表达
+- **保留问答互动**：保留老师提问和学生回答的对话
+- **专业术语**：修正专业术语的错误识别（如将"数据库"识别为"数据哭"的情况）
+
+### 格式规范
+- 使用正确的标点符号（句号、逗号、分号、问号、感叹号等）
+- 段落之间用空行分隔
+- 对话部分保留说话人和内容
+
+### 输出格式
+- 仅输出纠错后的文字稿内容，不包含任何解释性文字
+- 不使用代码块包裹整个输出
+- 确保内容流畅、规范、易读'''
+
     def __init__(self,
                  text_source: TextSource,
                  dump_dir: pathlib.Path = pathlib.Path('.'),
-                 dump_summarization_response: bool = True):
+                 dump_summarization_response: bool = True,
+                 task_timeout: Optional[float] = None):
         """
         Initialize the Summarization worker.
 
@@ -202,12 +240,13 @@ class SummarizationWorker(BaseWorker):
             text_source: Source of the text (OCR or STT)
             dump_dir: Directory to dump summarization responses
             dump_summarization_response: Whether to dump summarization responses to JSON
+            task_timeout: Timeout for individual summarization tasks in seconds (None = no timeout)
         """
         rpm, tpm = get_rate_limit_config('SUMMARIZATION')
         max_retries, retry_delay = get_retry_config('SUMMARIZATION')
 
         super().__init__(name='SummarizationWorker', rpm=rpm, tpm=tpm, pricing_prefix='SUMMARIZATION',
-                        max_retries=max_retries, retry_delay=retry_delay)
+                        max_retries=max_retries, retry_delay=retry_delay, task_timeout=task_timeout)
 
         self._dump_dir = dump_dir
         self._dump_summarization_response = dump_summarization_response
@@ -238,7 +277,13 @@ class SummarizationWorker(BaseWorker):
         self._methods = {
             'summarize': self._summarize,
             'summarize_long': self._summarize_long_text,
+            'correct_transcript': self._correct_transcript,
+            'generate_title': self._generate_title,
         }
+
+    def get_model_name(self) -> str:
+        """Get the model name used by this worker."""
+        return self._model
 
     def _summarize(self, text: str) -> str:
         """Summarize the given text."""
@@ -429,9 +474,206 @@ class SummarizationWorker(BaseWorker):
         # Decide whether to use chunking
         if use_chunking and len(text) > max_chars:
             # For long text, use chunking
-            future = self.submit('summarize_long', text, max_chars, progress_callback)
-            return future.get(timeout=timeout)
+            future = self.submit('summarize_long', text, max_chars, progress_callback, _task_timeout=timeout)
+            return future.get()
         else:
             # For short text, use direct summarization
-            future = self.submit('summarize', text)
-            return future.get(timeout=timeout)
+            future = self.submit('summarize', text, _task_timeout=timeout)
+            return future.get()
+
+    def _correct_transcript(self, text: str) -> str:
+        """
+        Correct the given transcript text.
+
+        Args:
+            text: Raw STT transcript text to correct
+
+        Returns:
+            Corrected transcript text
+        """
+        print(f'[SummarizationWorker] Correcting transcript of length {len(text)}')
+
+        user_prompt = f'''请将以下语音转录文本纠错为规范、易读的文字稿：
+
+---
+{text}
+---
+
+请按照上述要求进行纠错，确保去除口语冗余、修正语法错误、修正标点符号、修正错别字。'''
+
+        # For Qwen3 models, use \no_think prefix to disable chain-of-thought
+        if 'qwen3' in self._model.lower():
+            user_prompt = f'\\no_think {user_prompt}'
+
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {'role': 'system', 'content': self._TRANSCRIPT_CORRECTION_PROMPT},
+                {'role': 'user', 'content': user_prompt}
+            ],
+            temperature=0.1,
+            top_p=1.0,
+        )
+
+        if not response.choices:
+            raise RuntimeError(f'No choices returned from API for transcript correction')
+        if not response.choices[0].message.content:
+            raise RuntimeError(f'No content returned from API for transcript correction')
+
+        content = response.choices[0].message.content
+        # Strip outer markdown code block wrapper (Qwen models add this)
+        content = _strip_outer_markdown_block(content)
+        # Clean inline math formulas to fix rendering issues
+        content = _clean_inline_math(content)
+
+        # Track usage and cost
+        if not response.usage:
+            logger.warning(f'Transcript correction response did not include usage information, cost tracking disabled for this request')
+            print(f'[SummarizationWorker] Transcript correction Done, length: {len(content)}')
+        else:
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
+            cost = self._track_usage(input_tokens, output_tokens)
+            cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
+            print(f'[SummarizationWorker] Transcript correction Done, length: {len(content)}, '
+                  f'usage: {input_tokens} in + {output_tokens} out = {response.usage.total_tokens} total, cost: {cost_str}')
+
+        if self._dump_summarization_response:
+            dump_file_path = self._dump_dir.joinpath(f'TranscriptCorrection_{time.strftime("%Y_%m_%d-%H_%M_%S")}.json')
+            with open(dump_file_path, 'w') as f:
+                f.write(response.model_dump_json(indent=4, ensure_ascii=False))
+            print(f'[SummarizationWorker] Dumped transcript correction response to {dump_file_path}')
+
+        return content
+
+    def correct_transcript(
+        self,
+        text: str,
+        timeout: Optional[float] = None,
+        use_chunking: bool = False,
+        max_chars: int = 8000,
+        progress_callback=None
+    ) -> str:
+        """
+        Correct the given transcript text (public interface).
+
+        Args:
+            text: Raw STT transcript text to correct
+            timeout: Maximum time to wait for result (seconds) - enforced at worker level
+            use_chunking: Whether to use chunking for long texts
+            max_chars: Maximum characters before chunking is triggered (if use_chunking=True)
+            progress_callback: Optional callback(chunk_index, total_chunks, message)
+
+        Returns:
+            Corrected transcript text
+        """
+        # For now, transcript correction doesn't use chunking
+        # If needed in the future, we can implement chunked correction similar to summarize_long
+        future = self.submit('correct_transcript', text, _task_timeout=timeout)
+        return future.get()
+
+    def _generate_title(self, content: str) -> str:
+        """
+        Generate a title for the given content using AI.
+
+        Extracts the main headings and generates a concise, descriptive title.
+
+        Args:
+            content: The summary/transcript content
+
+        Returns:
+            Generated title (safe for use as filename)
+        """
+        import re
+
+        # Extract headings from the content
+        headings = []
+        for line in content.split('\n'):
+            line = line.strip()
+            # Match markdown headings # ## ###
+            match = re.match(r'^(#{1,3})\s+(.+)$', line)
+            if match:
+                level = len(match.group(1))
+                heading = match.group(2).strip()
+                if level == 1:
+                    # Top-level headings are most important
+                    headings.insert(0, heading)
+                else:
+                    headings.append(heading)
+
+        # Build a prompt with the extracted headings
+        if headings:
+            headings_text = '\n'.join(f'- {h}' for h in headings[:10])  # Limit to top 10 headings
+            prompt_headings = f'\n\n笔记中的主要标题：\n{headings_text}'
+        else:
+            prompt_headings = ''
+
+        prompt = f'''请为以下笔记生成一个简洁、准确的文件名（不含后缀）。
+
+要求：
+1. 标题应能概括笔记的主要内容
+2. 使用中文，简洁明了（建议 5-15 个字）
+3. 只输出标题，不要输出任何其他内容
+4. 不要使用特殊字符（如 / \\ : * ? " < > | ）
+5. 如果是课程笔记，格式可以是：课程名_主题
+6. 如果是复习课笔记，格式可以是：科目_主题{prompt_headings}
+
+笔记内容预览（前 500 字）：
+{content[:500]}
+
+请直接输出标题，不要有任何其他文字。'''
+
+        # For Qwen3 models, use \no_think prefix to disable chain-of-thought
+        if 'qwen3' in self._model.lower():
+            prompt = f'\\no_think {prompt}'
+
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {'role': 'user', 'content': prompt}
+            ],
+            temperature=0.3,
+            top_p=1.0,
+            max_tokens=100,
+        )
+
+        if not response.choices:
+            raise RuntimeError('No choices returned from API for title generation')
+        if not response.choices[0].message.content:
+            raise RuntimeError('No content returned from API for title generation')
+
+        title = response.choices[0].message.content.strip()
+
+        # Clean up the title - remove invalid filename characters
+        # Remove any common prefixes the AI might add
+        title = re.sub(r'^(标题|文件名|名称)[:：]\s*', '', title)
+        title = re.sub(r'[^\w\s\u4e00-\u9fff\-_（）()]', '', title)
+        title = title.strip()
+        title = title[:50]  # Limit to 50 characters
+
+        # Track usage and cost
+        if response.usage:
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
+            cost = self._track_usage(input_tokens, output_tokens)
+            cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
+            print(f'[SummarizationWorker] Title generation complete: "{title}", '
+                  f'usage: {input_tokens} in + {output_tokens} out, cost: {cost_str}')
+        else:
+            print(f'[SummarizationWorker] Title generation complete: "{title}"')
+
+        return title
+
+    def generate_title(self, content: str, timeout: Optional[float] = None) -> str:
+        """
+        Generate a title for the given content (public interface).
+
+        Args:
+            content: The summary/transcript content
+            timeout: Maximum time to wait for result (seconds) - enforced at worker level
+
+        Returns:
+            Generated title (safe for use as filename)
+        """
+        future = self.submit('generate_title', content, _task_timeout=timeout)
+        return future.get()

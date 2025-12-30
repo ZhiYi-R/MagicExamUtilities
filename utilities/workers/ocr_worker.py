@@ -175,7 +175,8 @@ class OCRWorker(BaseWorker):
     def __init__(self,
                  dump_dir: pathlib.Path = pathlib.Path('.'),
                  dump_ocr_response: bool = True,
-                 max_retries: Optional[int] = None):
+                 max_retries: Optional[int] = None,
+                 task_timeout: Optional[float] = None):
         """
         Initialize the OCR worker.
 
@@ -183,6 +184,7 @@ class OCRWorker(BaseWorker):
             dump_dir: Directory to dump OCR responses
             dump_ocr_response: Whether to dump OCR responses to JSON
             max_retries: Maximum number of retries for failed OCR attempts (None = use env var)
+            task_timeout: Timeout for individual OCR tasks in seconds (None = no timeout)
         """
         rpm, tpm = get_rate_limit_config('OCR')
         retry_max, retry_delay = get_retry_config('OCR')
@@ -192,7 +194,7 @@ class OCRWorker(BaseWorker):
             max_retries = retry_max if retry_max > 0 else 2
 
         super().__init__(name='OCRWorker', rpm=rpm, tpm=tpm, pricing_prefix='OCR',
-                        max_retries=max_retries, retry_delay=retry_delay)
+                        max_retries=max_retries, retry_delay=retry_delay, task_timeout=task_timeout)
 
         self._dump_dir = dump_dir
         self._dump_ocr_response = dump_ocr_response
@@ -273,6 +275,10 @@ class OCRWorker(BaseWorker):
             'ocr_structured': self._ocr_structured,
         }
 
+    def get_model_name(self) -> str:
+        """Get the model name used by this worker."""
+        return self._model
+
     def _ocr(self, image_path: pathlib.Path) -> str:
         """Process an image with OCR (legacy, returns plain text)."""
         result = self._ocr_structured(image_path)
@@ -342,6 +348,7 @@ class OCRWorker(BaseWorker):
             file_path=str(image_path),
             file_hash=file_hash,
             page_number=page_number,
+            page_hash=file_hash,  # Use image file hash as page hash for page-level caching
             timestamp=os.path.getmtime(image_path),
             raw_text=content,
             sections=[],
@@ -350,7 +357,8 @@ class OCRWorker(BaseWorker):
         )
 
         if self._dump_ocr_response:
-            dump_file_path = self._dump_dir.joinpath(f'{image_path.stem}.json')
+            # Save dump file in the same directory as the image (PDF cache folder)
+            dump_file_path = image_path.parent.joinpath(f'{image_path.stem}.json')
             with open(dump_file_path, 'w') as f:
                 f.write(response.model_dump_json(indent=4, ensure_ascii=False))
             print(f'Dumped OCR response to {dump_file_path}')
@@ -425,13 +433,13 @@ class OCRWorker(BaseWorker):
 
         Args:
             image_path: Path to the image file
-            timeout: Maximum time to wait for result (seconds)
+            timeout: Maximum time to wait for result (seconds) - enforced at worker level
 
         Returns:
             OCR result as text
         """
-        future = self.submit('ocr', image_path)
-        return future.get(timeout=timeout)
+        future = self.submit('ocr', image_path, _task_timeout=timeout)
+        return future.get()
 
     def process_image_structured(self, image_path: pathlib.Path, timeout: Optional[float] = None) -> OCRResult:
         """
@@ -439,13 +447,13 @@ class OCRWorker(BaseWorker):
 
         Args:
             image_path: Path to the image file
-            timeout: Maximum time to wait for result (seconds)
+            timeout: Maximum time to wait for result (seconds) - enforced at worker level
 
         Returns:
             Structured OCR result
         """
-        future = self.submit('ocr_structured', image_path)
-        return future.get(timeout=timeout)
+        future = self.submit('ocr_structured', image_path, _task_timeout=timeout)
+        return future.get()
 
     def process_images(self, image_paths: list[pathlib.Path], timeout_per_image: Optional[float] = None) -> list[str]:
         """
@@ -453,7 +461,7 @@ class OCRWorker(BaseWorker):
 
         Args:
             image_paths: List of paths to image files
-            timeout_per_image: Maximum time to wait per image (seconds)
+            timeout_per_image: Maximum time to wait per image (seconds) - enforced at worker level
 
         Returns:
             List of OCR results
@@ -464,19 +472,28 @@ class OCRWorker(BaseWorker):
             results.append(result)
         return results
 
-    def process_images_structured(self, image_paths: list[pathlib.Path], timeout_per_image: Optional[float] = None) -> list[OCRResult]:
+    def process_images_structured(
+        self,
+        image_paths: list[pathlib.Path],
+        timeout_per_image: Optional[float] = None,
+        progress_callback: Optional[callable] = None
+    ) -> list[OCRResult]:
         """
         Process multiple images with OCR and return structured results.
 
         Args:
             image_paths: List of paths to image files
-            timeout_per_image: Maximum time to wait per image (seconds)
+            timeout_per_image: Maximum time to wait per image (seconds) - enforced at worker level
+            progress_callback: Optional callback(current, total, message) for progress updates
 
         Returns:
             List of structured OCR results
         """
         results = []
-        for image_path in image_paths:
+        for i, image_path in enumerate(image_paths):
             result = self.process_image_structured(image_path, timeout=timeout_per_image)
             results.append(result)
+            # Report progress after each page
+            if progress_callback:
+                progress_callback(i + 1, len(image_paths), f"OCR 页 {i+1}/{len(image_paths)}")
         return results

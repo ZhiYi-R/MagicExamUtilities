@@ -27,6 +27,7 @@ ENV/
 # AI assistant documentation
 CLAUDE.md
 plan.md
+.claude
 
 # Test coverage
 .coverage

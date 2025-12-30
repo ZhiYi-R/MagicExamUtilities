@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
 from .models import KnowledgeBase, KnowledgeBaseStore
-from ..cache import OCRCache
+from ..cache import OCRCache, STTCache
 
 # Use TYPE_CHECKING for type hints to avoid circular import
 if TYPE_CHECKING:
@@ -33,6 +33,7 @@ class KnowledgeBaseManager:
         self._cache_dir = cache_dir
         self._store = KnowledgeBaseStore(cache_dir)
         self._ocr_cache = OCRCache(cache_dir=cache_dir)
+        self._stt_cache = STTCache(cache_dir=cache_dir)
 
     def list_knowledge_bases(self) -> List[KnowledgeBase]:
         """
@@ -63,7 +64,8 @@ class KnowledgeBaseManager:
         kb_id: str,
         name: str,
         description: str = '',
-        pdf_files: Optional[List[str]] = None
+        pdf_files: Optional[List[str]] = None,
+        audio_files: Optional[List[str]] = None
     ) -> KnowledgeBase:
         """
         Create a new knowledge base.
@@ -73,6 +75,7 @@ class KnowledgeBaseManager:
             name: Display name
             description: Description
             pdf_files: Optional list of PDF file names to include
+            audio_files: Optional list of audio file names to include
 
         Returns:
             Created KnowledgeBase
@@ -88,15 +91,15 @@ class KnowledgeBaseManager:
         if not kb_id.replace('_', '').replace('-', '').isalnum():
             raise ValueError(f"Invalid kb_id: '{kb_id}'. Use only alphanumeric, underscore, and hyphen")
 
-        kb = KnowledgeBase.create(kb_id, name, description, pdf_files)
+        kb = KnowledgeBase.create(kb_id, name, description, pdf_files, audio_files)
 
         # Save to store
         all_kbs = self.list_knowledge_bases()
         all_kbs.append(kb)
         self._store.save_all(all_kbs)
 
-        # Build index if PDFs are specified
-        if kb.pdf_files:
+        # Build index if files are specified
+        if kb.pdf_files or kb.audio_files:
             self.build_kb_index(kb_id)
 
         print(f"[KBManager] Created knowledge base: {kb_id}")
@@ -202,52 +205,84 @@ class KnowledgeBaseManager:
         if not kb:
             raise ValueError(f"Knowledge base '{kb_id}' not found")
 
-        if not kb.pdf_files:
-            print(f"[KBManager] KB '{kb_id}' has no PDFs, skipping index build")
+        if not kb.has_content:
+            print(f"[KBManager] KB '{kb_id}' has no content, skipping index build")
             return
 
         print(f"[KBManager] Building index for knowledge base: {kb_id}")
 
-        # Get cached PDF data
+        # Get cached data from both PDFs and audio
         documents = []
         metadata = []
 
+        # Process PDF files
         for pdf_name in kb.pdf_files:
-            # Find the cache file for this PDF
-            cache_path = self._cache_dir.joinpath('ocr')
+            # Find the cache file for this PDF (look in stored/ subdirectory)
+            cache_path = self._cache_dir.joinpath('ocr', 'stored')
             found = False
 
-            for cache_file in cache_path.glob('*.json'):
-                try:
-                    with open(cache_file, 'r', encoding='utf-8') as f:
-                        data = __import__('json').load(f)
-                        if 'page_results' in data:
-                            cached_path = data.get('file_path', '')
-                            if Path(cached_path).name == pdf_name:
-                                # Found matching cache
-                                from ..models import PDFCache
-                                pdf_cache = PDFCache.load(cache_file)
+            for cache_dir in cache_path.glob('*'):
+                if not cache_dir.is_dir():
+                    continue
+                cache_file = cache_dir.joinpath('cache.json')
+                if not cache_file.exists():
+                    continue
 
-                                # Add full text
-                                documents.append(pdf_cache.full_text)
+                try:
+                    from ..models import PDFCache
+                    pdf_cache = PDFCache.load(cache_file)
+                    if Path(pdf_cache.file_path).name == pdf_name:
+                        # Found matching cache
+                        # Add full text
+                        documents.append(pdf_cache.full_text)
+                        metadata.append({
+                            'source': pdf_name,
+                            'type': 'pdf_full_text',
+                            'kb_id': kb_id
+                        })
+
+                        # Add sections
+                        for page_result in pdf_cache.page_results:
+                            for section in page_result.sections:
+                                documents.append(section.content)
                                 metadata.append({
                                     'source': pdf_name,
-                                    'type': 'full_text',
+                                    'page': page_result.page_number,
+                                    'type': section.type.value,
                                     'kb_id': kb_id
                                 })
+                        found = True
+                        break
+                except Exception:
+                    continue
 
-                                # Add sections
-                                for page_result in pdf_cache.page_results:
-                                    for section in page_result.sections:
-                                        documents.append(section.content)
-                                        metadata.append({
-                                            'source': pdf_name,
-                                            'page': page_result.page_number,
-                                            'type': section.type.value,
-                                            'kb_id': kb_id
-                                        })
-                                found = True
-                                break
+        # Process audio files
+        for audio_name in kb.audio_files:
+            # Find the cache file for this audio
+            cache_path = self._cache_dir.joinpath('stt')
+            found = False
+
+            for cache_dir in cache_path.glob('*'):
+                if not cache_dir.is_dir():
+                    continue
+                cache_file = cache_dir.joinpath('cache.json')
+                if not cache_file.exists():
+                    continue
+
+                try:
+                    from ..models import AudioCache
+                    audio_cache = AudioCache.load(cache_file)
+                    if Path(audio_cache.file_path).name == audio_name:
+                        # Found matching cache
+                        # Add full transcript
+                        documents.append(audio_cache.raw_text)
+                        metadata.append({
+                            'source': audio_name,
+                            'type': 'audio_transcript',
+                            'kb_id': kb_id
+                        })
+                        found = True
+                        break
                 except Exception:
                     continue
 
@@ -271,21 +306,108 @@ class KnowledgeBaseManager:
         Returns:
             List of PDF file names
         """
-        cache_path = self._cache_dir.joinpath('ocr')
+        cache_path = self._cache_dir.joinpath('ocr', 'stored')
         pdf_names = []
 
-        for cache_file in cache_path.glob('*.json'):
-            try:
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    data = __import__('json').load(f)
-                    if 'page_results' in data:
-                        file_path = data.get('file_path', '')
-                        if file_path:
-                            pdf_names.append(Path(file_path).name)
-            except Exception:
+        for cache_dir in cache_path.glob('*'):
+            if not cache_dir.is_dir():
                 continue
+            cache_file = cache_dir.joinpath('cache.json')
+            if cache_file.exists():
+                try:
+                    from ..models import PDFCache
+                    pdf_cache = PDFCache.load(cache_file)
+                    pdf_names.append(Path(pdf_cache.file_path).name)
+                except Exception:
+                    continue
 
         return pdf_names
+
+    def get_available_audios(self) -> List[str]:
+        """
+        Get list of audio files that have cached STT data.
+
+        Returns:
+            List of audio file names
+        """
+        cache_path = self._cache_dir.joinpath('stt')
+        audio_names = []
+
+        for cache_dir in cache_path.glob('*'):
+            if not cache_dir.is_dir():
+                continue
+            cache_file = cache_dir.joinpath('cache.json')
+            if cache_file.exists():
+                try:
+                    from ..models import AudioCache
+                    audio_cache = AudioCache.load(cache_file)
+                    audio_names.append(Path(audio_cache.file_path).name)
+                except Exception:
+                    continue
+
+        return audio_names
+
+    def add_audio_to_kb(self, kb_id: str, audio_name: str) -> None:
+        """
+        Add an audio file to a knowledge base.
+
+        Args:
+            kb_id: Knowledge base ID
+            audio_name: Audio file name
+
+        Raises:
+            ValueError: If kb_id not found
+        """
+        kb = self.get_knowledge_base(kb_id)
+        if not kb:
+            raise ValueError(f"Knowledge base '{kb_id}' not found")
+
+        kb.add_audio(audio_name)
+
+        # Save updated KB
+        all_kbs = self.list_knowledge_bases()
+        for i, existing_kb in enumerate(all_kbs):
+            if existing_kb.id == kb_id:
+                all_kbs[i] = kb
+                break
+
+        self._store.save_all(all_kbs)
+
+        # Rebuild index
+        self.build_kb_index(kb_id)
+
+        print(f"[KBManager] Added '{audio_name}' to knowledge base: {kb_id}")
+
+    def remove_audio_from_kb(self, kb_id: str, audio_name: str) -> None:
+        """
+        Remove an audio file from a knowledge base.
+
+        Args:
+            kb_id: Knowledge base ID
+            audio_name: Audio file name
+
+        Raises:
+            ValueError: If kb_id not found
+        """
+        kb = self.get_knowledge_base(kb_id)
+        if not kb:
+            raise ValueError(f"Knowledge base '{kb_id}' not found")
+
+        kb.remove_audio(audio_name)
+
+        # Save updated KB
+        all_kbs = self.list_knowledge_bases()
+        for i, existing_kb in enumerate(all_kbs):
+            if existing_kb.id == kb_id:
+                all_kbs[i] = kb
+                break
+
+        self._store.save_all(all_kbs)
+
+        # Rebuild index
+        self.build_kb_index(kb_id)
+
+        print(f"[KBManager] Removed '{audio_name}' from knowledge base: {kb_id}")
 
     def get_semantic_searcher(self, kb_id: str) -> Optional["SemanticSearcher"]:
         """
