@@ -35,22 +35,16 @@ def _strip_outer_markdown_block(content: str) -> str:
         Content with outer markdown block removed
     """
     content = content.strip()
+    lines = content.split('\n')
 
-    # Pattern for ```markdown ... ```
-    pattern = r'^```markdown\s*\n(.*?)\n```$'
-
-    match = re.match(pattern, content, re.DOTALL | re.MULTILINE)
-    if match:
-        return match.group(1).strip()
-
-    # Also try generic ``` ... ``` without language tag
-    generic_pattern = r'^```\s*\n(.*?)\n```$'
-    generic_match = re.match(generic_pattern, content, re.DOTALL | re.MULTILINE)
-    if generic_match:
-        content = generic_match.group(1).strip()
-        # Only remove if the first line looks like markdown, not code
-        if content.startswith('#') or content.startswith('##'):
-            return content
+    # Check if content starts with ```markdown or ``` and ends with ```
+    if len(lines) >= 3 and lines[0].startswith('```'):
+        # First line is the opening marker (e.g., ```markdown or ```)
+        # Last line should be closing ```
+        if lines[-1].strip() == '```':
+            # Extract inner content (between first and last lines)
+            inner_lines = lines[1:-1]
+            return '\n'.join(inner_lines)
 
     return content
 
