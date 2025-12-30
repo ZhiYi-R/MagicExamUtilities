@@ -9,11 +9,51 @@ import os
 import time
 import json
 import pathlib
+import re
 from enum import Enum
 from typing import Optional, List
 from openai import OpenAI
 
 from ..worker import BaseWorker, get_rate_limit_config
+
+
+def _strip_outer_markdown_block(content: str) -> str:
+    """
+    Strip the outer markdown code block wrapper if present.
+
+    Some models (like Qwen) wrap the entire output in:
+    ```markdown
+    ...content...
+    ```
+
+    This function detects and removes that wrapper while preserving
+    any internal code blocks.
+
+    Args:
+        content: The raw content from the model
+
+    Returns:
+        Content with outer markdown block removed
+    """
+    content = content.strip()
+
+    # Pattern for ```markdown ... ```
+    pattern = r'^```markdown\s*\n(.*?)\n```$'
+
+    match = re.match(pattern, content, re.DOTALL | re.MULTILINE)
+    if match:
+        return match.group(1).strip()
+
+    # Also try generic ``` ... ``` without language tag
+    generic_pattern = r'^```\s*\n(.*?)\n```$'
+    generic_match = re.match(generic_pattern, content, re.DOTALL | re.MULTILINE)
+    if generic_match:
+        content = generic_match.group(1).strip()
+        # Only remove if the first line looks like markdown, not code
+        if content.startswith('#') or content.startswith('##'):
+            return content
+
+    return content
 
 
 class TextSource(Enum):
@@ -192,6 +232,8 @@ class SummarizationWorker(BaseWorker):
             raise RuntimeError(f'No content returned from API for text')
 
         content = response.choices[0].message.content
+        # Strip outer markdown code block wrapper (Qwen models add this)
+        content = _strip_outer_markdown_block(content)
 
         if not response.usage:
             print(f'Summarization Done for text, length: {len(content)}')

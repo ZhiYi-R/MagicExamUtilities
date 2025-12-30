@@ -7,11 +7,51 @@ import os
 import base64
 import hashlib
 import pathlib
+import re
 from typing import Optional
 from openai import OpenAI
 
 from ..worker import BaseWorker, get_rate_limit_config
 from ..models import OCRResult, compute_file_hash, estimate_tokens
+
+
+def _strip_outer_markdown_block(content: str) -> str:
+    """
+    Strip the outer markdown code block wrapper if present.
+
+    Some models (like Qwen) wrap the entire output in:
+    ```markdown
+    ...content...
+    ```
+
+    This function detects and removes that wrapper while preserving
+    any internal code blocks.
+
+    Args:
+        content: The raw content from the model
+
+    Returns:
+        Content with outer markdown block removed
+    """
+    content = content.strip()
+
+    # Pattern for ```markdown ... ```
+    pattern = r'^```markdown\s*\n(.*?)\n```$'
+
+    match = re.match(pattern, content, re.DOTALL | re.MULTILINE)
+    if match:
+        return match.group(1).strip()
+
+    # Also try generic ``` ... ``` without language tag
+    generic_pattern = r'^```\s*\n(.*?)\n```$'
+    generic_match = re.match(generic_pattern, content, re.DOTALL | re.MULTILINE)
+    if generic_match:
+        content = generic_match.group(1).strip()
+        # Only remove if the first line looks like markdown, not code
+        if content.startswith('#') or content.startswith('##'):
+            return content
+
+    return content
 
 
 class OCRWorker(BaseWorker):
@@ -148,6 +188,8 @@ class OCRWorker(BaseWorker):
             raise RuntimeError(f'No content returned from API for image {image_path}')
 
         content = response.choices[0].message.content
+        # Strip outer markdown code block wrapper (Qwen models add this)
+        content = _strip_outer_markdown_block(content)
         token_count = response.usage.total_tokens if response.usage else estimate_tokens(len(content))
 
         if not response.usage:
