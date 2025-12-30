@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from pdf2image import convert_from_path
 
 from utilities.workers import OCRWorker, STTWorker, SummarizationWorker, TextSource
+from utilities.cache import OCRCache
 
 
 # Global workers for cleanup
@@ -121,29 +122,51 @@ def process_pdf_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_d
 
     print(f'[Main] Starting OCR summarization for {len(files)} PDF(s)')
 
-    # Step 1: Convert PDFs to images
-    image_paths = []
-    for pdf_path in files:
-        dump_path = dump_dir.joinpath(pdf_path.stem)
-        image_paths.extend(convert_pdf_to_images(pdf_path, dump_path))
-    print(f'[Main] Converted {len(files)} PDF(s) to {len(image_paths)} image(s)')
+    # Initialize cache manager
+    ocr_cache = OCRCache(cache_dir=dump_dir)
 
-    # Step 2: Initialize and start OCR worker
+    # Initialize OCR worker
     ocr_dump_path = dump_dir.joinpath('ocr')
     ocr_dump_path.mkdir(parents=True, exist_ok=True)
     _ocr_worker = OCRWorker(dump_dir=ocr_dump_path, dump_ocr_response=dump)
     _ocr_worker.start()
 
-    # Step 3: Process images with OCR
-    print(f'[Main] Processing {len(image_paths)} image(s) with OCR...')
+    # Process each PDF
+    all_page_results = []
     full_text = ''
-    for i, image in enumerate(image_paths, 1):
-        print(f'[Main] OCR progress: {i}/{len(image_paths)} - {image.name}')
-        text = _ocr_worker.process_image(image, timeout=300)
-        full_text += text
-    print(f'[Main] OCR complete. Total text length: {len(full_text)} characters')
 
-    # Step 4: Initialize and start Summarization worker
+    for pdf_path in files:
+        print(f'[Main] Processing PDF: {pdf_path.name}')
+
+        # Check cache first
+        cached = ocr_cache.get_pdf_cache(pdf_path)
+        if cached:
+            print(f'[Main] Using cached OCR results for {pdf_path.name}')
+            all_page_results.extend(cached.page_results)
+            full_text += cached.full_text
+            continue
+
+        # Convert PDF to images
+        pdf_dump_path = dump_dir.joinpath(pdf_path.stem)
+        image_paths = convert_pdf_to_images(pdf_path, pdf_dump_path)
+        print(f'[Main] Converted {pdf_path.name} to {len(image_paths)} image(s)')
+
+        # Process images with structured OCR
+        print(f'[Main] Processing {len(image_paths)} image(s) with OCR...')
+        page_results = _ocr_worker.process_images_structured(image_paths, timeout_per_image=300)
+
+        # Extract full text from results
+        pdf_text = ''.join([r.raw_text for r in page_results])
+        full_text += pdf_text
+        all_page_results.extend(page_results)
+        print(f'[Main] OCR complete for {pdf_path.name}. Text length: {len(pdf_text)} characters')
+
+        # Save to cache
+        ocr_cache.save_pdf_cache(pdf_path, page_results, pdf_text)
+
+    print(f'[Main] All OCR complete. Total text length: {len(full_text)} characters')
+
+    # Initialize and start Summarization worker
     summarization_dump_path = dump_dir.joinpath('summarization')
     summarization_dump_path.mkdir(parents=True, exist_ok=True)
     _summarization_worker = SummarizationWorker(
@@ -153,12 +176,12 @@ def process_pdf_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_d
     )
     _summarization_worker.start()
 
-    # Step 5: Summarize the text
+    # Summarize the text
     print('[Main] Summarizing text...')
     summary = _summarization_worker.summarize(full_text, timeout=600)
     print(f'[Main] Summarization complete. Summary length: {len(summary)} characters')
 
-    # Step 6: Write output
+    # Write output
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir.joinpath(f'{time.strftime("%Y_%m_%d-%H_%M_%S")}.md')
     with open(output_file, 'w', encoding='utf-8') as f:

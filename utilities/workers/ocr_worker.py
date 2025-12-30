@@ -5,11 +5,13 @@ Supports both DeepSeek OCR and generic vision-language models.
 
 import os
 import base64
+import hashlib
 import pathlib
 from typing import Optional
 from openai import OpenAI
 
 from ..worker import BaseWorker, get_rate_limit_config
+from ..models import OCRResult, compute_file_hash, estimate_tokens
 
 
 class OCRWorker(BaseWorker):
@@ -71,14 +73,29 @@ class OCRWorker(BaseWorker):
         """Register OCR methods."""
         self._methods = {
             'ocr': self._ocr,
+            'ocr_structured': self._ocr_structured,
         }
 
     def _ocr(self, image_path: pathlib.Path) -> str:
-        """Process an image with OCR."""
+        """Process an image with OCR (legacy, returns plain text)."""
+        result = self._ocr_structured(image_path)
+        return result.raw_text
+
+    def _ocr_structured(self, image_path: pathlib.Path) -> OCRResult:
+        """Process an image with OCR and return structured result."""
         if not image_path.exists():
             raise FileNotFoundError(f'Image {image_path} does not exist')
 
         print(f'OCRing image: {image_path}')
+
+        # Compute file hash for caching
+        file_hash = compute_file_hash(image_path)
+
+        # Extract page number from filename (format: pdfname_0.jpg)
+        try:
+            page_number = int(image_path.stem.split('_')[-1])
+        except (ValueError, IndexError):
+            page_number = 0
 
         with open(image_path, 'rb') as f:
             image_base64 = base64.b64encode(f.read()).decode('utf-8')
@@ -94,11 +111,24 @@ class OCRWorker(BaseWorker):
             raise RuntimeError(f'No content returned from API for image {image_path}')
 
         content = response.choices[0].message.content
+        token_count = response.usage.total_tokens if response.usage else estimate_tokens(len(content))
 
         if not response.usage:
             print(f'OCR Done for image: {image_path}, length: {len(content)}')
         else:
-            print(f'OCR Done for image: {image_path}, length: {len(content)}, usage: {response.usage.total_tokens}')
+            print(f'OCR Done for image: {image_path}, length: {len(content)}, usage: {token_count}')
+
+        # Create structured result
+        result = OCRResult(
+            file_path=str(image_path),
+            file_hash=file_hash,
+            page_number=page_number,
+            timestamp=os.path.getmtime(image_path),
+            raw_text=content,
+            sections=[],  # Could be enhanced with text parsing
+            char_count=len(content),
+            token_estimate=token_count
+        )
 
         if self._dump_ocr_response:
             dump_file_path = self._dump_dir.joinpath(f'{image_path.stem}.json')
@@ -106,7 +136,7 @@ class OCRWorker(BaseWorker):
                 f.write(response.model_dump_json(indent=4, ensure_ascii=False))
             print(f'Dumped OCR response to {dump_file_path}')
 
-        return content
+        return result
 
     def _deepseek_ocr(self, image_base64: str, image_path: pathlib.Path):
         """DeepSeek OCR implementation."""
@@ -169,11 +199,12 @@ class OCRWorker(BaseWorker):
 
     def _estimate_tokens(self, task) -> int:
         """Estimate tokens for OCR requests."""
+        # Use actual token count from result if available
         return 1000  # Conservative estimate: 1000 tokens per image
 
     def process_image(self, image_path: pathlib.Path, timeout: Optional[float] = None) -> str:
         """
-        Process a single image with OCR.
+        Process a single image with OCR (legacy, returns plain text).
 
         Args:
             image_path: Path to the image file
@@ -183,6 +214,20 @@ class OCRWorker(BaseWorker):
             OCR result as text
         """
         future = self.submit('ocr', image_path)
+        return future.get(timeout=timeout)
+
+    def process_image_structured(self, image_path: pathlib.Path, timeout: Optional[float] = None) -> OCRResult:
+        """
+        Process a single image with OCR and return structured result.
+
+        Args:
+            image_path: Path to the image file
+            timeout: Maximum time to wait for result (seconds)
+
+        Returns:
+            Structured OCR result
+        """
+        future = self.submit('ocr_structured', image_path)
         return future.get(timeout=timeout)
 
     def process_images(self, image_paths: list[pathlib.Path], timeout_per_image: Optional[float] = None) -> list[str]:
@@ -199,5 +244,22 @@ class OCRWorker(BaseWorker):
         results = []
         for image_path in image_paths:
             result = self.process_image(image_path, timeout=timeout_per_image)
+            results.append(result)
+        return results
+
+    def process_images_structured(self, image_paths: list[pathlib.Path], timeout_per_image: Optional[float] = None) -> list[OCRResult]:
+        """
+        Process multiple images with OCR and return structured results.
+
+        Args:
+            image_paths: List of paths to image files
+            timeout_per_image: Maximum time to wait per image (seconds)
+
+        Returns:
+            List of structured OCR results
+        """
+        results = []
+        for image_path in image_paths:
+            result = self.process_image_structured(image_path, timeout=timeout_per_image)
             results.append(result)
         return results

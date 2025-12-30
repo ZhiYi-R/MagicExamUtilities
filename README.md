@@ -67,6 +67,25 @@ python main.py --type [audio|pdf] --input [input_files] --output [output_dir]
 
 ## Changelog
 
+### [0.5.0] - 2024-12-30
+
+**新增：OCR 缓存与结构化数据存储**
+- 新增 `utilities/models.py`：结构化数据模型（OCRResult、OCRSection、PDFCache）
+- 新增 `utilities/cache.py`：基于文件哈希的 OCR 缓存管理器
+- OCRWorker 新增 `process_images_structured()` 方法，返回结构化 OCRResult
+- main.py PDF 处理管线现在支持缓存，避免重复 OCR 处理
+- 缓存基于 PDF 文件的 MD5 哈希，支持缓存有效性验证（修改时间检查）
+
+**架构变更：**
+- `utilities/models.py`: 数据模型定义，包含 JSON 序列化/反序列化
+- `utilities/cache.py`: OCRCache 管理器，提供 `get_pdf_cache()` 和 `save_pdf_cache()` 方法
+- `utilities/workers/ocr_worker.py`: 新增 `_ocr_structured()` 和 `process_images_structured()` 方法
+- `main.py`: `process_pdf_pipeline()` 现在使用缓存和结构化 OCR 结果
+
+**测试：**
+- 所有 100 个单元测试通过
+- 代码覆盖率提升至 94%（models.py 100%, cache.py 96%）
+
 ### [0.4.0] - 2024-12-30
 
 **重构：精简架构，PDF 处理合并到 main.py**
