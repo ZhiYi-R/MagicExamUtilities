@@ -8,7 +8,7 @@
 
 1. 从老师的复习课录音生成复习（预习）笔记
 2. 从老师的教学PPT生成复习(预习)笔记
-   
+
 计划实现的功能有：
 
 1. ASK AI：从已经生成的笔记和原文提供的上下文中回答问题
@@ -36,16 +36,17 @@ uv pip install -e .
 4. 运行项目：
 
 ```
-python main.py --type [audio|pdf] --input [input_files] --dump --dump-dir [cache_dir] --output [output_dir]
+python main.py --type [audio|pdf] --input [input_files] --output [output_dir]
 ```
 
 | 参数 | 描述 |
 | --- | --- |
-| --type | 输入文件类型，可选值为audio和pdf |
-| --input | 输入文件路径，支持通配符, 对于audio类型，仅支持mp3文件, 对于pdf类型，仅支持pdf文件 |
-| --dump | 是否将结果保存到cache中 |
-| --dump-dir | cache目录 |
-| --output | 输出目录 |
+| --type | 输入文件类型，可选值为audio和pdf (必需) |
+| --input | 输入文件路径，支持通配符 (必需) |
+| --output | 输出目录 (必需) |
+| --dump | 是否将中间结果保存到cache中 (默认: True) |
+| --no-dump | 不保存中间结果 |
+| --dump-dir | cache目录 (默认: ./cache/) |
 
 ## FAQ
 
@@ -61,5 +62,37 @@ python main.py --type [audio|pdf] --input [input_files] --dump --dump-dir [cache
 
 ### 为什么我的STT请求失败了
 
-实际上笔者只适配了硅基流动的ASR模型，如果需要使用别家的模型，需要自行适配。此外，ASR_API_URL作为独立的配置项出现的原因是ASR模型的URL地址需要填写完整，例如：  
+实际上笔者只适配了硅基流动的ASR模型，如果需要使用别家的模型，需要自行适配。此外，ASR_API_URL作为独立的配置项出现的原因是ASR模型的URL地址需要填写完整，例如：
 [https://api.siliconflow.cn/v1/audio/transcriptions](https://api.siliconflow.cn/v1/audio/transcriptions)
+
+## Changelog
+
+### [0.2.0] - 2024-12-30
+
+**重构：Worker 架构与流控**
+- 新增 Worker 架构，所有 AI 服务通过独立的 daemon 线程处理
+- 新增基于令牌桶算法的 RPM/TPM 流控机制
+- 为每个服务添加独立的 API 配置（URL、Key、Model）
+- 实现优雅关闭，确保队列中的任务完成后再退出
+
+**新增配置项：**
+- `OCR_API_URL` / `OCR_API_KEY` / `OCR_RPM` / `OCR_TPM`
+- `SUMMARIZATION_API_URL` / `SUMMARIZATION_API_KEY` / `SUMMARIZATION_RPM` / `SUMMARIZATION_TPM`
+- ASR 服务保持原有独立配置
+
+**测试：**
+- 新增完整的单元测试框架 (pytest)
+- 60 个单元测试，覆盖核心功能
+- 代码覆盖率约 70%
+
+**架构变更：**
+- `utilities/rate_limiter.py`: 令牌桶流控实现
+- `utilities/worker.py`: Worker 基类
+- `utilities/workers/`: OCRWorker, STTWorker, SummarizationWorker
+
+### [0.1.0] - 2024-12-21
+
+**初始版本**
+- PDF 转 OCR 并生成总结笔记
+- 音频转 STT 并生成总结笔记
+- 支持 OpenAI Like API
