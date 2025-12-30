@@ -21,6 +21,7 @@
 | **知识库管理** | 按科目分组管理 PDF，独立索引和搜索 |
 | **智能缓存** | 基于文件哈希的缓存，避免重复处理 |
 | **分块总结** | 处理超长文本，突破模型上下文窗口限制 |
+| **费用跟踪** | 自动跟踪 API 使用量和费用（可选配置） |
 
 ---
 
@@ -103,6 +104,24 @@ ASR_MODEL=TeleAI/TeleSpeechASR
 ASK_AI_API_URL=https://api.siliconflow.cn/v1
 ASK_AI_API_KEY=your_api_key_here
 ASK_AI_MODEL=Qwen/Qwen3-Next-80B-A3B-Instruct
+```
+
+**（可选）配置模型价格用于费用跟踪：**
+
+```bash
+# === 模型价格配置（费用跟踪，可选） ===
+# 价格单位：美元/百万 tokens
+# 参考价格（硅基流动，2024-12）：
+# - Qwen3-VL-8B-Instruct (OCR): 输入 $0.014/M, 输出 $0.028/M
+# - Qwen3-Next-80B-A3B-Instruct: 输入 $0.14/M, 输出 $0.28/M
+# - TeleSpeechASR (STT): 输入 $0.1/M, 输出 $0.1/M
+
+OCR_INPUT_PRICE_PER_M=0.014
+OCR_OUTPUT_PRICE_PER_M=0.028
+SUMMARIZATION_INPUT_PRICE_PER_M=0.14
+SUMMARIZATION_OUTPUT_PRICE_PER_M=0.28
+ASK_AI_INPUT_PRICE_PER_M=0.14
+ASK_AI_OUTPUT_PRICE_PER_M=0.28
 ```
 
 ### 3. 验证配置
@@ -208,6 +227,23 @@ python main.py --type pdf --input file.pdf --output ./notes --dump-dir ./cache
 3. 合并所有总结
 4. 如合并结果仍过长，进行二次总结
 
+### 费用跟踪
+
+启用费用跟踪后，系统会自动记录每次 API 调用的 token 使用量和费用：
+
+**日志示例：**
+```
+OCR Done for image: page_0.jpg, length: 1234, usage: 1200 in + 800 out = 2000 total, cost: $0.000036
+Summarization Done for text, length: 5678, usage: 4500 in + 1200 out = 5700 total, cost: $0.000468
+```
+
+**Worker 关闭时显示汇总：**
+```
+[OCRWorker] Cost summary: requests: 10, input_tokens: 12,000, output_tokens: 8,000, total_cost: $0.000360
+```
+
+**配置方法：** 在 `.env` 文件中设置对应服务的 `_INPUT_PRICE_PER_M` 和 `_OUTPUT_PRICE_PER_M` 环境变量。
+
 ---
 
 ## 开发计划
@@ -229,6 +265,25 @@ python main.py --type pdf --input file.pdf --output ./notes --dump-dir ./cache
 ## 更新日志
 
 详见 [Changelog](#changelog) 章节。
+
+### [0.7.2] - 2024-12-30
+
+**新增：模型费用跟踪功能**
+- BaseWorker 新增 CostTracker 类，自动跟踪 token 使用量和费用
+- 支持输入和输出价格分别配置（价格单位：美元/百万 tokens）
+- 每次请求日志显示详细 token 使用和费用信息
+- Worker 关闭时打印费用汇总（请求数、输入 tokens、输出 tokens、总费用）
+- 价格配置为可选项，未设置时功能正常使用（不显示费用）
+
+**更新：环境变量配置**
+- .env.example 新增"Model Pricing Configuration"章节
+- 提供常见模型价格参考表（SiliconFlow 2024-12）
+- 支持 OCR、ASR、SUMMARIZATION、ASK_AI 四个服务的独立价格配置
+
+**测试：**
+- 新增 CostTracker 单元测试（test_worker.py）
+- 新增 get_pricing_config 函数测试
+- 新增 BaseWorker 费用跟踪集成测试
 
 ### [0.7.1] - 2024-12-30
 

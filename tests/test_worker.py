@@ -7,7 +7,10 @@ import time
 import pytest
 from unittest.mock import Mock, patch
 
-from utilities.worker import BaseWorker, Future, Task, get_rate_limit_config
+from utilities.worker import (
+    BaseWorker, Future, Task, get_rate_limit_config,
+    CostTracker, get_pricing_config
+)
 
 
 @pytest.mark.unit
@@ -331,3 +334,211 @@ class TestBaseWorker:
         # Shutdown all workers
         for worker in workers:
             worker.shutdown(wait=True, timeout=2.0)
+
+
+@pytest.mark.unit
+class TestCostTracker:
+    """Test cases for CostTracker class."""
+
+    def test_cost_tracker_creation(self):
+        """Test CostTracker initialization."""
+        tracker = CostTracker()
+        assert tracker.total_input_tokens == 0
+        assert tracker.total_output_tokens == 0
+        assert tracker.total_cost == 0.0
+        assert tracker.request_count == 0
+        assert tracker.input_price_per_m is None
+        assert tracker.output_price_per_m is None
+
+    def test_cost_tracker_with_pricing(self):
+        """Test CostTracker with pricing configured."""
+        tracker = CostTracker(input_price_per_m=0.14, output_price_per_m=0.28)
+        assert tracker.input_price_per_m == 0.14
+        assert tracker.output_price_per_m == 0.28
+
+    def test_add_usage_without_pricing(self):
+        """Test add_usage without pricing configured."""
+        tracker = CostTracker()
+        cost = tracker.add_usage(1000, 500)
+
+        assert cost == 0.0
+        assert tracker.total_input_tokens == 1000
+        assert tracker.total_output_tokens == 500
+        assert tracker.request_count == 1
+
+    def test_add_usage_with_pricing(self):
+        """Test add_usage with pricing configured."""
+        tracker = CostTracker(input_price_per_m=0.14, output_price_per_m=0.28)
+
+        # 1000 input tokens @ $0.14/M = $0.00014
+        # 500 output tokens @ $0.28/M = $0.00014
+        # Total = $0.00028
+        cost = tracker.add_usage(1000, 500)
+
+        assert abs(cost - 0.00028) < 0.000001
+        assert tracker.total_input_tokens == 1000
+        assert tracker.total_output_tokens == 500
+        assert tracker.total_cost == cost
+        assert tracker.request_count == 1
+
+    def test_multiple_add_usage(self):
+        """Test multiple add_usage calls."""
+        tracker = CostTracker(input_price_per_m=0.14, output_price_per_m=0.28)
+
+        tracker.add_usage(1000, 500)
+        tracker.add_usage(2000, 1000)
+
+        assert tracker.total_input_tokens == 3000
+        assert tracker.total_output_tokens == 1500
+        assert tracker.request_count == 2
+        # 3000 * 0.14 / 1M + 1500 * 0.28 / 1M = 0.00084
+        assert abs(tracker.total_cost - 0.00084) < 0.000001
+
+    def test_format_cost(self):
+        """Test cost formatting."""
+        tracker = CostTracker()
+
+        # With zero cost
+        assert tracker.format_cost(0) == "N/A"
+
+        # With positive cost
+        assert tracker.format_cost(0.000123456) == "$0.000123"
+
+    def test_get_summary(self):
+        """Test summary generation."""
+        tracker = CostTracker(input_price_per_m=0.14, output_price_per_m=0.28)
+        tracker.add_usage(1000, 500)
+        tracker.add_usage(2000, 1000)
+
+        summary = tracker.get_summary()
+        assert "requests: 2" in summary
+        assert "input_tokens: 3,000" in summary
+        assert "output_tokens: 1,500" in summary
+        assert "total_cost:" in summary
+
+    def test_get_summary_without_pricing(self):
+        """Test summary without pricing configured."""
+        tracker = CostTracker()
+        tracker.add_usage(1000, 500)
+
+        summary = tracker.get_summary()
+        assert "requests: 1" in summary
+        assert "input_tokens: 1,000" in summary
+        assert "output_tokens: 500" in summary
+        assert "total_cost:" not in summary
+
+
+@pytest.mark.unit
+class TestGetPricingConfig:
+    """Test cases for get_pricing_config function."""
+
+    def test_get_pricing_config_with_values(self):
+        """Test with both input and output prices configured."""
+        os.environ['TEST_INPUT_PRICE_PER_M'] = '0.14'
+        os.environ['TEST_OUTPUT_PRICE_PER_M'] = '0.28'
+
+        input_price, output_price = get_pricing_config('TEST')
+
+        assert input_price == 0.14
+        assert output_price == 0.28
+
+        # Cleanup
+        del os.environ['TEST_INPUT_PRICE_PER_M']
+        del os.environ['TEST_OUTPUT_PRICE_PER_M']
+
+    def test_get_pricing_config_partial(self):
+        """Test with only input price configured."""
+        os.environ['TEST_INPUT_PRICE_PER_M'] = '0.14'
+
+        input_price, output_price = get_pricing_config('TEST')
+
+        assert input_price == 0.14
+        assert output_price is None
+
+        # Cleanup
+        del os.environ['TEST_INPUT_PRICE_PER_M']
+
+    def test_get_pricing_config_no_config(self):
+        """Test with no pricing configuration."""
+        # Clear any existing config
+        for key in list(os.environ.keys()):
+            if 'PRICE_PER_M' in key:
+                del os.environ[key]
+
+        input_price, output_price = get_pricing_config('NONEXISTENT')
+
+        assert input_price is None
+        assert output_price is None
+
+
+@pytest.mark.unit
+class TestBaseWorkerCostTracking:
+    """Test cases for BaseWorker cost tracking."""
+
+    def test_worker_with_pricing_prefix(self, temp_dir):
+        """Test worker initialization with pricing prefix."""
+        os.environ['TEST_INPUT_PRICE_PER_M'] = '0.14'
+        os.environ['TEST_OUTPUT_PRICE_PER_M'] = '0.28'
+
+        class TestWorker(BaseWorker):
+            def _register_methods(self):
+                self._methods = {'test': lambda: 'result'}
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._register_methods()
+
+        worker = TestWorker(name="TestWorker", pricing_prefix='TEST')
+
+        assert worker._cost_tracker.input_price_per_m == 0.14
+        assert worker._cost_tracker.output_price_per_m == 0.28
+
+        # Cleanup
+        del os.environ['TEST_INPUT_PRICE_PER_M']
+        del os.environ['TEST_OUTPUT_PRICE_PER_M']
+
+    def test_worker_track_usage(self, temp_dir):
+        """Test worker usage tracking."""
+        class TestWorker(BaseWorker):
+            def _register_methods(self):
+                self._methods = {'test': lambda: 'result'}
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._cost_tracker = CostTracker(
+                    input_price_per_m=0.14,
+                    output_price_per_m=0.28
+                )
+                self._register_methods()
+
+        worker = TestWorker(name="TestWorker")
+
+        cost = worker._track_usage(1000, 500)
+
+        assert abs(cost - 0.00028) < 0.000001
+        assert worker._cost_tracker.total_input_tokens == 1000
+        assert worker._cost_tracker.total_output_tokens == 500
+
+    def test_worker_shutdown_prints_cost_summary(self, temp_dir, capsys):
+        """Test that worker shutdown prints cost summary."""
+        class TestWorker(BaseWorker):
+            def _register_methods(self):
+                self._methods = {'test': lambda: 'result'}
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._cost_tracker = CostTracker(
+                    input_price_per_m=0.14,
+                    output_price_per_m=0.28
+                )
+                self._register_methods()
+
+        worker = TestWorker(name="TestWorker", poll_interval=0.01)
+        worker.start()
+        worker._track_usage(1000, 500)
+        worker.shutdown(wait=True)
+
+        captured = capsys.readouterr()
+        assert "Cost summary" in captured.out
+        assert "requests: 1" in captured.out
+        assert "input_tokens: 1,000" in captured.out

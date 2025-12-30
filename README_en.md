@@ -21,6 +21,7 @@ An AI-powered tool for final exam preparation that automatically generates study
 | **Knowledge Base Management** | Organize PDFs by subject with independent indexing and search |
 | **Smart Caching** | File hash-based caching to avoid redundant processing |
 | **Chunked Summarization** | Handle ultra-long texts beyond model context window limits |
+| **Cost Tracking** | Automatically track API usage and costs (optional configuration) |
 
 ---
 
@@ -103,6 +104,24 @@ ASR_MODEL=TeleAI/TeleSpeechASR
 ASK_AI_API_URL=https://api.siliconflow.cn/v1
 ASK_AI_API_KEY=your_api_key_here
 ASK_AI_MODEL=Qwen/Qwen3-Next-80B-A3B-Instruct
+```
+
+**（Optional）Configure Model Pricing for Cost Tracking:**
+
+```bash
+# === Model Pricing Configuration (Cost Tracking, Optional) ===
+# Price unit: USD per 1M tokens
+# Reference pricing (SiliconFlow, 2024-12):
+# - Qwen3-VL-8B-Instruct (OCR): Input $0.014/M, Output $0.028/M
+# - Qwen3-Next-80B-A3B-Instruct: Input $0.14/M, Output $0.28/M
+# - TeleSpeechASR (STT): Input $0.1/M, Output $0.1/M
+
+OCR_INPUT_PRICE_PER_M=0.014
+OCR_OUTPUT_PRICE_PER_M=0.028
+SUMMARIZATION_INPUT_PRICE_PER_M=0.14
+SUMMARIZATION_OUTPUT_PRICE_PER_M=0.28
+ASK_AI_INPUT_PRICE_PER_M=0.14
+ASK_AI_OUTPUT_PRICE_PER_M=0.28
 ```
 
 ### 3. Verify Configuration
@@ -209,6 +228,23 @@ When a document exceeds the model's context window:
 3. All summaries are merged
 4. If merged result is still too long, a second summarization pass is performed
 
+### Cost Tracking
+
+When cost tracking is enabled, the system automatically records token usage and costs for each API call:
+
+**Log Example:**
+```
+OCR Done for image: page_0.jpg, length: 1234, usage: 1200 in + 800 out = 2000 total, cost: $0.000036
+Summarization Done for text, length: 5678, usage: 4500 in + 1200 out = 5700 total, cost: $0.000468
+```
+
+**Worker Shutdown Summary:**
+```
+[OCRWorker] Cost summary: requests: 10, input_tokens: 12,000, output_tokens: 8,000, total_cost: $0.000360
+```
+
+**Configuration:** Set the `_INPUT_PRICE_PER_M` and `_OUTPUT_PRICE_PER_M` environment variables for each service in your `.env` file.
+
 ---
 
 ## Development Roadmap
@@ -230,6 +266,25 @@ This project is open source under [GPL v3.0](https://www.gnu.org/licenses/gpl-3.
 ## Changelog
 
 See [Changelog](#changelog) section below.
+
+### [0.7.2] - 2024-12-30
+
+**Added: Model Cost Tracking Feature**
+- BaseWorker now includes CostTracker class for automatic token usage and cost tracking
+- Supports separate input and output pricing (price unit: USD per 1M tokens)
+- Detailed token usage and cost information displayed in logs for each request
+- Cost summary printed on worker shutdown (request count, input tokens, output tokens, total cost)
+- Pricing configuration is optional - system works normally without pricing configured (no cost displayed)
+
+**Updated: Environment Variable Configuration**
+- .env.example added "Model Pricing Configuration" section
+- Reference pricing table for common models (SiliconFlow, 2024-12)
+- Independent pricing configuration support for OCR, ASR, SUMMARIZATION, ASK_AI services
+
+**Tests:**
+- Added CostTracker unit tests (test_worker.py)
+- Added get_pricing_config function tests
+- Added BaseWorker cost tracking integration tests
 
 ### [0.7.1] - 2024-12-30
 
