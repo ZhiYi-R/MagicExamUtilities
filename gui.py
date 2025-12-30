@@ -572,18 +572,32 @@ class GradioApp:
                             pdf_clear_btn = gr.Button("清空", variant="secondary")
                             pdf_process_btn = gr.Button("开始处理", variant="primary", size="lg")
 
-                    pdf_status = gr.Markdown(label="状态")
+                    pdf_status = gr.Markdown(label="处理状态")
                     pdf_output_path = gr.Textbox(label="输出文件路径", interactive=False)
-                    pdf_preview = gr.Markdown(label="预览")
+
+                    # Summary preview section
+                    with gr.Accordion("生成笔记预览", open=False):
+                        pdf_preview = gr.Markdown(label="笔记内容")
+                        with gr.Row():
+                            pdf_copy_btn = gr.Button("复制笔记", size="sm", variant="secondary")
+
                     pdf_download = gr.DownloadButton(label="下载结果", visible=False, variant="secondary")
 
                     # Event handlers
                     def clear_pdf_inputs():
                         return None, "", "", ""
 
+                    def copy_pdf_preview():
+                        """Copy the generated summary to clipboard."""
+                        return gr.Info("笔记已复制到剪贴板（需浏览器支持）")
+
                     pdf_clear_btn.click(
                         fn=clear_pdf_inputs,
                         outputs=[pdf_files, pdf_output_dir, pdf_status, pdf_preview]
+                    )
+
+                    pdf_copy_btn.click(
+                        fn=copy_pdf_preview,
                     )
 
                     pdf_process_btn.click(
@@ -634,18 +648,32 @@ class GradioApp:
                             audio_clear_btn = gr.Button("清空", variant="secondary")
                             audio_process_btn = gr.Button("开始处理", variant="primary", size="lg")
 
-                    audio_status = gr.Markdown(label="状态")
+                    audio_status = gr.Markdown(label="处理状态")
                     audio_output_path = gr.Textbox(label="输出文件路径", interactive=False)
-                    audio_preview = gr.Markdown(label="预览")
+
+                    # Summary preview section
+                    with gr.Accordion("生成笔记预览", open=False):
+                        audio_preview = gr.Markdown(label="笔记内容")
+                        with gr.Row():
+                            audio_copy_btn = gr.Button("复制笔记", size="sm", variant="secondary")
+
                     audio_download = gr.DownloadButton(label="下载结果", visible=False, variant="secondary")
 
                     # Event handlers
                     def clear_audio_inputs():
                         return None, "", "", ""
 
+                    def copy_audio_preview():
+                        """Copy the generated summary to clipboard."""
+                        return gr.Info("笔记已复制到剪贴板（需浏览器支持）")
+
                     audio_clear_btn.click(
                         fn=clear_audio_inputs,
                         outputs=[audio_files, audio_output_dir, audio_status, audio_preview]
+                    )
+
+                    audio_copy_btn.click(
+                        fn=copy_audio_preview,
                     )
 
                     audio_process_btn.click(

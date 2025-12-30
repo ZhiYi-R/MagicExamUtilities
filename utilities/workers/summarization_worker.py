@@ -56,6 +56,56 @@ def _strip_outer_markdown_block(content: str) -> str:
     return content
 
 
+def _clean_inline_math(content: str) -> str:
+    """
+    Clean up inline math formulas to ensure proper rendering.
+
+    Some markdown renderers have issues with spaces around $ symbols.
+    This function normalizes inline math formulas.
+
+    Examples:
+    - "$ foo $" -> "$foo$"
+    - "$ x + y $" -> "$x + y$"
+    - "$$" (display math) is left unchanged
+
+    Args:
+        content: The markdown content
+
+    Returns:
+        Content with normalized inline math formulas
+    """
+    # Fix inline math with spaces: $ foo $ -> $foo$
+    # But preserve display math: $$...$$
+    result = []
+
+    i = 0
+    while i < len(content):
+        # Check for display math $$...$$
+        if i + 1 < len(content) and content[i:i+2] == '$$':
+            # Find the closing $$
+            j = content.find('$$', i + 2)
+            if j != -1:
+                result.append(content[i:j+2])
+                i = j + 2
+                continue
+
+        # Check for inline math $...$
+        if content[i] == '$':
+            # Find the closing $
+            j = content.find('$', i + 1)
+            if j != -1:
+                # Extract the formula and trim spaces
+                formula = content[i+1:j].strip()
+                result.append(f'${formula}$')
+                i = j + 1
+                continue
+
+        result.append(content[i])
+        i += 1
+
+    return ''.join(result)
+
+
 class TextSource(Enum):
     """Source of text for summarization."""
     OCR = 'OCR'
@@ -234,6 +284,8 @@ class SummarizationWorker(BaseWorker):
         content = response.choices[0].message.content
         # Strip outer markdown code block wrapper (Qwen models add this)
         content = _strip_outer_markdown_block(content)
+        # Clean inline math formulas to fix rendering issues
+        content = _clean_inline_math(content)
 
         if not response.usage:
             print(f'Summarization Done for text, length: {len(content)}')
