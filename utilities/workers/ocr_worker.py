@@ -52,15 +52,33 @@ class OCRWorker(BaseWorker):
         self._deepseek_prompt = '<image>\nOCR this image with Markdown format.'
 
         # Generic VL prompt for more flexible OCR
-        self._generic_prompt = '''
-        你是一个专业的图像抄录员，你需要抄录图像中的文本内容，并输出Markdown格式的文本。你需要注意以下几点：
-        1. 抄录的文本内容必须与图像中的内容一致。
-        2. 如果图像中包含表格，你需要将表格抄录为Markdown格式的表格。
-        3. 如果图像中包含公式，你需要将公式抄录为Markdown格式的公式。
-        4. 如果图像中包含流程图或是架构图，你需要将其转换为Mermaid图像嵌入到Markdown中。
-        5. 如果图像中包含代码，你需要将代码抄录为Markdown格式的代码块。
-        6. 如果图像中包含电路图，你需要将电路图转换为Tikz代码块（使用CircuiTikz宏包）嵌入到Markdown中。
-        '''
+        self._generic_prompt = r'''你是一个专业的 OCR 文本识别助手，负责将图像中的内容准确地转换为 Markdown 格式文本。
+
+## 输出要求
+
+1. **准确性优先**：严格保持原文内容，不添加、不删除、不修改任何信息
+2. **结构清晰**：保持原文的层次结构和排版逻辑
+3. **格式规范**：使用标准 Markdown 语法
+
+## 特殊内容处理
+
+| 内容类型 | 输出格式 |
+|---------|---------|
+| **标题** | 使用 `#` 表示层级，如 `# 一级标题`、`## 二级标题` |
+| **表格** | 使用 Markdown 表格格式 `| 列1 | 列2 |` |
+| **公式** | 行内公式用 `$公式$`，独立公式用 `$$公式$$` |
+| **代码** | 使用 ```语言 代码块 ``` 标注语言类型 |
+| **列表** | 无序列表用 `-` 或 `*`，有序列表用 `1.` |
+| **强调** | 加粗用 `**文本**`，斜体用 `*文本*` |
+| **流程图/架构图** | 简化描述为文本，可用 Mermaid 格式 |
+| **图片说明** | 用 `![描述](url)` 格式标注图片位置 |
+
+## 注意事项
+
+- 遇到模糊不清的内容，用 `[ unclear:...]` 标注
+- 保持段落分隔，使用空行分段
+- 如果是扫描件的页面，请保持页面内容的完整性和顺序
+- 仅输出 Markdown 内容，不要包含任何解释性文字'''
 
         # Register methods after initialization
         self._register_methods()
@@ -157,12 +175,11 @@ class OCRWorker(BaseWorker):
             ]}],
             temperature=0.0,
             top_p=1.0,
-            max_tokens=1024,
+            max_tokens=4096,
             frequency_penalty=0.0,
-            presence_penalty=0.2,
+            presence_penalty=0.0,
             extra_body={
-                'repetition_penalty': 1.02,
-                'presence_penalty': 0.2,
+                'repetition_penalty': 1.0,
             }
         )
 
@@ -182,18 +199,17 @@ class OCRWorker(BaseWorker):
                     },
                     {
                         'type': 'text',
-                        'text': '请抄录图像中的文本内容'
+                        'text': '请识别这张图像中的所有内容，按原文顺序输出 Markdown 格式。'
                     }
                 ]}
             ],
             temperature=0.0,
             top_p=1.0,
-            max_tokens=1024,
+            max_tokens=4096,
             frequency_penalty=0.0,
-            presence_penalty=0.2,
+            presence_penalty=0.0,
             extra_body={
-                'repetition_penalty': 1.02,
-                'presence_penalty': 0.2
+                'repetition_penalty': 1.0,
             }
         )
 
