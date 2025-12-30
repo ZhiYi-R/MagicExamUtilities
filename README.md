@@ -67,6 +67,23 @@ python main.py --type [audio|pdf] --input [input_files] --output [output_dir]
 
 ## Changelog
 
+### [0.3.0] - 2024-12-30
+
+**重构：精简架构，所有逻辑合并到 Worker**
+- 将 DeepSeekOCR、GenericVL、STT、Summarization 的逻辑直接合并到各自的 Worker 中
+- 删除冗余的中间层类，简化代码结构
+- 代码覆盖率提升至 91%
+
+**架构简化：**
+- `utilities/workers/ocr_worker.py`: 包含所有 OCR 逻辑（DeepSeek + GenericVL）
+- `utilities/workers/stt_worker.py`: 包含所有 STT 逻辑
+- `utilities/workers/summarization_worker.py`: 包含所有 Summarization 逻辑和 TextSource 枚举
+- 删除：`DeepSeekOCR.py`, `GenericVisionLanguageOCR.py`, `STT.py`, `Summarization.py`
+
+**测试：**
+- 更新所有测试以适应新架构
+- 所有 60 个单元测试通过
+
 ### [0.2.0] - 2024-12-30
 
 **重构：Worker 架构与流控**

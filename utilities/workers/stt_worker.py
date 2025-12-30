@@ -2,11 +2,13 @@
 STT (Speech-to-Text) Worker for processing audio files.
 """
 
+import os
+import json
 import pathlib
 from typing import Optional
+import requests
 
 from ..worker import BaseWorker, get_rate_limit_config
-from ..STT import SpeechToText
 
 
 class STTWorker(BaseWorker):
@@ -29,10 +31,9 @@ class STTWorker(BaseWorker):
 
         self._dump_dir = dump_dir
         self._dump_stt_response = dump_stt_response
-        self._stt = SpeechToText(
-            dump_dir=dump_dir,
-            dump_stt_response=dump_stt_response
-        )
+        self._api_url = os.environ['ASR_API_URL']
+        self._api_key = os.environ['ASR_API_KEY']
+        self._model = os.environ['ASR_MODEL']
 
         # Register methods after STT is initialized
         self._register_methods()
@@ -43,17 +44,45 @@ class STTWorker(BaseWorker):
     def _register_methods(self) -> None:
         """Register STT methods."""
         self._methods = {
-            'stt': self._stt.stt,
+            'stt': self._stt,
         }
 
+    def _stt(self, audio_path: pathlib.Path) -> str:
+        """Process an audio file with STT."""
+        if not audio_path.exists():
+            raise FileNotFoundError(f'Audio {audio_path} does not exist')
+
+        print(f'STTing audio: {audio_path}')
+
+        with open(audio_path, 'rb') as f:
+            response = requests.post(
+                url=self._api_url,
+                headers={
+                    'Authorization': f'Bearer {self._api_key}',
+                },
+                files={
+                    'file': (audio_path.name, f.read(), 'audio/mpeg'),
+                    'model': (None, self._model)
+                }
+            )
+
+        if response.status_code != 200:
+            raise RuntimeError(f'STT failed for audio {audio_path}, status code: {response.status_code}, response: {response.text}')
+
+        if self._dump_stt_response:
+            dump_file_path = self._dump_dir.joinpath(f'{audio_path.stem}.json')
+            with open(dump_file_path, 'w') as f:
+                json.dump(response.json(), f, ensure_ascii=False, indent=4)
+            print(f'Dumped STT response to {dump_file_path}')
+
+        if not response.json()['text']:
+            raise RuntimeError(f'No text returned from ASR API for audio {audio_path}')
+
+        return response.json()['text']
+
     def _estimate_tokens(self, task) -> int:
-        """
-        Estimate tokens for STT requests.
-        STT typically returns a lot of text, so we estimate conservatively.
-        """
-        # Estimate based on typical audio length
-        # A 1-minute audio might produce ~100-200 tokens of text
-        return 500
+        """Estimate tokens for STT requests."""
+        return 500  # Conservative estimate: 500 tokens per audio
 
     def process_audio(self, audio_path: pathlib.Path, timeout: Optional[float] = None) -> str:
         """

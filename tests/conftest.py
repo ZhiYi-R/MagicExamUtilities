@@ -55,18 +55,16 @@ def mock_env_vars():
 @pytest.fixture
 def mock_openai_client():
     """Mock OpenAI client for testing."""
-    with patch('utilities.DeepSeekOCR.OpenAI') as mock_ocr, \
-         patch('utilities.GenericVisionLanguageOCR.OpenAI') as mock_generic, \
-         patch('utilities.Summarization.OpenAI') as mock_sum:
+    with patch('utilities.workers.ocr_worker.OpenAI') as mock_ocr, \
+         patch('utilities.workers.summarization_worker.OpenAI') as mock_sum:
 
         # Configure mock responses
-        for mock_client in [mock_ocr.return_value, mock_generic.return_value, mock_sum.return_value]:
+        for mock_client in [mock_ocr.return_value, mock_sum.return_value]:
             mock_response = Mock()
             mock_choice = Mock()
             mock_message = Mock()
             mock_message.content = "Test response"
             mock_choice.message = mock_message
-            mock_choice.message.content = "Test response"
             mock_response.choices = [mock_choice]
             mock_response.usage = Mock()
             mock_response.usage.total_tokens = 100
@@ -75,7 +73,6 @@ def mock_openai_client():
 
         yield {
             'ocr': mock_ocr,
-            'generic': mock_generic,
             'summarization': mock_sum,
         }
 
@@ -83,7 +80,7 @@ def mock_openai_client():
 @pytest.fixture
 def mock_requests():
     """Mock requests module for STT testing."""
-    with patch('utilities.STT.requests') as mock:
+    with patch('utilities.workers.stt_worker.requests') as mock:
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {'text': 'Test transcription'}

@@ -7,8 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import pytest
 
-from utilities.workers import OCRWorker, STTWorker, SummarizationWorker
-from utilities.Summarization import TextSource
+from utilities.workers import OCRWorker, STTWorker, SummarizationWorker, TextSource
 
 
 @pytest.mark.unit
@@ -23,19 +22,27 @@ class TestOCRWorker:
         worker = OCRWorker(dump_dir=temp_dir, dump_ocr_response=True)
 
         assert worker.name == "OCRWorker"
-        assert worker._ocr_type == "deepseek"
+        assert worker._use_deepseek is True
         assert worker._dump_dir == temp_dir
 
     @patch('utilities.workers.ocr_worker.get_rate_limit_config')
-    def test_ocr_worker_initialization_generic(self, mock_rate_config, temp_dir, mock_openai_client):
+    def test_ocr_worker_initialization_generic(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
         """Test OCRWorker initialization with Generic VL."""
         mock_rate_config.return_value = (60, 100000)
+        # Temporarily set OCR_USE_DEEPSEEK_OCR to 0
+        original = os.environ.get('OCR_USE_DEEPSEEK_OCR')
         os.environ['OCR_USE_DEEPSEEK_OCR'] = '0'
 
         worker = OCRWorker(dump_dir=temp_dir, dump_ocr_response=True)
 
+        # Restore original value
+        if original is not None:
+            os.environ['OCR_USE_DEEPSEEK_OCR'] = original
+        else:
+            del os.environ['OCR_USE_DEEPSEEK_OCR']
+
         assert worker.name == "OCRWorker"
-        assert worker._ocr_type == "generic"
+        assert worker._use_deepseek is False
 
     @patch('utilities.workers.ocr_worker.get_rate_limit_config')
     def test_ocr_worker_registers_methods(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):

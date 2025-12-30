@@ -4,12 +4,12 @@ Supports both DeepSeek OCR and generic vision-language models.
 """
 
 import os
+import base64
 import pathlib
 from typing import Optional
+from openai import OpenAI
 
 from ..worker import BaseWorker, get_rate_limit_config
-from ..DeepSeekOCR import DeepSeekOCR
-from ..GenericVisionLanguageOCR import GenericVL
 
 
 class OCRWorker(BaseWorker):
@@ -36,41 +36,140 @@ class OCRWorker(BaseWorker):
         self._dump_dir = dump_dir
         self._dump_ocr_response = dump_ocr_response
 
-        # Select OCR implementation based on environment variable
-        use_deepseek = os.environ.get('OCR_USE_DEEPSEEK_OCR', '1') == '1'
+        # Use OCR-specific config if available, otherwise fall back to legacy config
+        api_url = os.environ.get('OCR_API_URL', os.environ.get('OPENAI_LIKE_API_URL'))
+        api_key = os.environ.get('OCR_API_KEY', os.environ.get('OPENAI_LIKE_API_KEY'))
+        self._client = OpenAI(base_url=api_url, api_key=api_key)
+        self._model = os.environ['OCR_MODEL']
 
-        if use_deepseek:
-            self._ocr = DeepSeekOCR(
-                dump_dir=dump_dir,
-                dump_ocr_response=dump_ocr_response
-            )
-            self._ocr_type = 'deepseek'
-        else:
-            self._ocr = GenericVL(
-                dump_dir=dump_dir,
-                dump_ocr_response=dump_ocr_response
-            )
-            self._ocr_type = 'generic'
+        # Select OCR type based on environment variable
+        self._use_deepseek = os.environ.get('OCR_USE_DEEPSEEK_OCR', '1') == '1'
 
-        # Register methods after OCR is initialized
+        # Set prompt based on OCR type
+        # DeepSeek OCR is extremely sensitive to prompt - DO NOT change
+        self._deepseek_prompt = '<image>\nOCR this image with Markdown format.'
+
+        # Generic VL prompt for more flexible OCR
+        self._generic_prompt = '''
+        你是一个专业的图像抄录员，你需要抄录图像中的文本内容，并输出Markdown格式的文本。你需要注意以下几点：
+        1. 抄录的文本内容必须与图像中的内容一致。
+        2. 如果图像中包含表格，你需要将表格抄录为Markdown格式的表格。
+        3. 如果图像中包含公式，你需要将公式抄录为Markdown格式的公式。
+        4. 如果图像中包含流程图或是架构图，你需要将其转换为Mermaid图像嵌入到Markdown中。
+        5. 如果图像中包含代码，你需要将代码抄录为Markdown格式的代码块。
+        6. 如果图像中包含电路图，你需要将电路图转换为Tikz代码块（使用CircuiTikz宏包）嵌入到Markdown中。
+        '''
+
+        # Register methods after initialization
         self._register_methods()
 
-        print(f"[OCRWorker] Initialized with {self._ocr_type} OCR")
+        ocr_type = 'deepseek' if self._use_deepseek else 'generic'
+        print(f"[OCRWorker] Initialized with {ocr_type} OCR")
         print(f"[OCRWorker] Rate limits: RPM={rpm}, TPM={tpm}")
 
     def _register_methods(self) -> None:
         """Register OCR methods."""
         self._methods = {
-            'ocr': self._ocr.ocr,
+            'ocr': self._ocr,
         }
 
+    def _ocr(self, image_path: pathlib.Path) -> str:
+        """Process an image with OCR."""
+        if not image_path.exists():
+            raise FileNotFoundError(f'Image {image_path} does not exist')
+
+        print(f'OCRing image: {image_path}')
+
+        with open(image_path, 'rb') as f:
+            image_base64 = base64.b64encode(f.read()).decode('utf-8')
+
+            if self._use_deepseek:
+                response = self._deepseek_ocr(image_base64, image_path)
+            else:
+                response = self._generic_ocr(image_base64, image_path)
+
+        if not response.choices:
+            raise RuntimeError(f'No choices returned from API for image {image_path}')
+        if not response.choices[0].message.content:
+            raise RuntimeError(f'No content returned from API for image {image_path}')
+
+        content = response.choices[0].message.content
+
+        if not response.usage:
+            print(f'OCR Done for image: {image_path}, length: {len(content)}')
+        else:
+            print(f'OCR Done for image: {image_path}, length: {len(content)}, usage: {response.usage.total_tokens}')
+
+        if self._dump_ocr_response:
+            dump_file_path = self._dump_dir.joinpath(f'{image_path.stem}.json')
+            with open(dump_file_path, 'w') as f:
+                f.write(response.model_dump_json(indent=4, ensure_ascii=False))
+            print(f'Dumped OCR response to {dump_file_path}')
+
+        return content
+
+    def _deepseek_ocr(self, image_base64: str, image_path: pathlib.Path):
+        """DeepSeek OCR implementation."""
+        return self._client.chat.completions.create(
+            model=self._model,
+            messages=[{'role': 'user', 'content': [
+                {
+                    'type': 'image_url',
+                    'image_url': {
+                        'url': f'data:image/png;base64,{image_base64}',
+                        'detail': 'high'
+                    }
+                },
+                {
+                    'type': 'text',
+                    'text': self._deepseek_prompt
+                }
+            ]}],
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=1024,
+            frequency_penalty=0.0,
+            presence_penalty=0.2,
+            extra_body={
+                'repetition_penalty': 1.02,
+                'presence_penalty': 0.2,
+            }
+        )
+
+    def _generic_ocr(self, image_base64: str, image_path: pathlib.Path):
+        """Generic Vision-Language OCR implementation."""
+        return self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {'role': 'system', 'content': self._generic_prompt},
+                {'role': 'user', 'content': [
+                    {
+                        'type': 'image_url',
+                        'image_url': {
+                            'url': f'data:image/png;base64,{image_base64}',
+                            'detail': 'high'
+                        }
+                    },
+                    {
+                        'type': 'text',
+                        'text': '请抄录图像中的文本内容'
+                    }
+                ]}
+            ],
+            temperature=0.0,
+            top_p=1.0,
+            max_tokens=1024,
+            frequency_penalty=0.0,
+            presence_penalty=0.2,
+            extra_body={
+                'repetition_penalty': 1.02,
+                'presence_penalty': 0.2
+            }
+        )
+
     def _estimate_tokens(self, task) -> int:
-        """
-        Estimate tokens for OCR requests.
-        OCR typically consumes more tokens for image processing.
-        """
-        # Conservative estimate: 1000 tokens per image
-        return 1000
+        """Estimate tokens for OCR requests."""
+        return 1000  # Conservative estimate: 1000 tokens per image
 
     def process_image(self, image_path: pathlib.Path, timeout: Optional[float] = None) -> str:
         """

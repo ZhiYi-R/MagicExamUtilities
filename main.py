@@ -14,8 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from utilities.DumpPDF import dump_pdf
-from utilities.Summarization import TextSource
-from utilities.workers import OCRWorker, STTWorker, SummarizationWorker
+from utilities.workers import OCRWorker, STTWorker, SummarizationWorker, TextSource
 
 
 # Global workers for cleanup
