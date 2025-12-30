@@ -345,15 +345,7 @@ class GradioApp:
 
     def build_ui(self):
         """Build the Gradio UI."""
-        with gr.Blocks(
-            title="妙妙期末小工具",
-            theme=gr.themes.Soft(),
-            css="""
-                .gradio-container {
-                    max-width: 1200px !important;
-                }
-            """
-        ) as app:
+        with gr.Blocks(title="妙妙期末小工具") as app:
             gr.Markdown(
                 """
                 # 妙妙期末小工具
