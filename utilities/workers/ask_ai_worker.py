@@ -13,7 +13,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from openai import OpenAI
 
-from ..worker import BaseWorker, get_rate_limit_config
+from ..worker import BaseWorker, get_rate_limit_config, get_retry_config
 from ..retrieval.tools import get_all_tools
 
 
@@ -36,7 +36,10 @@ class AskAIWorker(BaseWorker):
             dump_ask_ai_response: Whether to dump Ask AI responses to JSON
         """
         rpm, tpm = get_rate_limit_config('ASK_AI')
-        super().__init__(name='AskAIWorker', rpm=rpm, tpm=tpm, pricing_prefix='ASK_AI')
+        max_retries, retry_delay = get_retry_config('ASK_AI')
+
+        super().__init__(name='AskAIWorker', rpm=rpm, tpm=tpm, pricing_prefix='ASK_AI',
+                        max_retries=max_retries, retry_delay=retry_delay)
 
         self._cache_dir = cache_dir
         self._dump_dir = cache_dir.joinpath('ask_ai')

@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Optional, List
 from openai import OpenAI
 
-from ..worker import BaseWorker, get_rate_limit_config
+from ..worker import BaseWorker, get_rate_limit_config, get_retry_config
 
 
 def _strip_outer_markdown_block(content: str) -> str:
@@ -201,7 +201,10 @@ class SummarizationWorker(BaseWorker):
             dump_summarization_response: Whether to dump summarization responses to JSON
         """
         rpm, tpm = get_rate_limit_config('SUMMARIZATION')
-        super().__init__(name='SummarizationWorker', rpm=rpm, tpm=tpm, pricing_prefix='SUMMARIZATION')
+        max_retries, retry_delay = get_retry_config('SUMMARIZATION')
+
+        super().__init__(name='SummarizationWorker', rpm=rpm, tpm=tpm, pricing_prefix='SUMMARIZATION',
+                        max_retries=max_retries, retry_delay=retry_delay)
 
         self._dump_dir = dump_dir
         self._dump_summarization_response = dump_summarization_response

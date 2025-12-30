@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from queue import Queue, Empty
-from typing import Any, Callable, Optional, Dict, Tuple
+from typing import Any, Callable, Optional, Dict, Tuple, Type
 from dataclasses import dataclass, field
 
 from .rate_limiter import RateLimiter
@@ -146,15 +146,27 @@ class BaseWorker(threading.Thread):
     Base worker class for async task processing.
 
     Workers run as daemon threads that process tasks from a queue.
-    They support rate limiting and graceful shutdown.
+    They support rate limiting, graceful shutdown, and automatic retry.
     """
+
+    # Exceptions that should not be retried
+    NON_RETRYABLE_EXCEPTIONS: Tuple[Type[Exception], ...] = (
+        ValueError,
+        TypeError,
+        AttributeError,
+        KeyError,
+        ImportError,
+        NotImplementedError,
+    )
 
     def __init__(self,
                  name: str,
                  rpm: Optional[int] = None,
                  tpm: Optional[int] = None,
                  poll_interval: float = 0.1,
-                 pricing_prefix: Optional[str] = None):
+                 pricing_prefix: Optional[str] = None,
+                 max_retries: int = 0,
+                 retry_delay: float = 1.0):
         """
         Initialize the worker.
 
@@ -164,6 +176,8 @@ class BaseWorker(threading.Thread):
             tpm: Tokens per minute limit (None = no limit)
             poll_interval: Time to sleep when queue is empty (seconds)
             pricing_prefix: Prefix for pricing env vars (e.g., 'OCR', 'SUMMARIZATION')
+            max_retries: Maximum number of retries for failed tasks (0 = no retry)
+            retry_delay: Delay between retries in seconds
         """
         super().__init__(daemon=True, name=name)
         self._queue: Queue[Task] = Queue()
@@ -171,6 +185,12 @@ class BaseWorker(threading.Thread):
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
         self._methods: Dict[str, Callable] = {}
+        self._max_retries = max_retries
+        self._retry_delay = retry_delay
+
+        # Statistics for retries
+        self._total_retries: int = 0
+        self._total_failures: int = 0
 
         # Initialize cost tracker
         self._cost_tracker = CostTracker()
@@ -181,6 +201,10 @@ class BaseWorker(threading.Thread):
             if input_price is not None or output_price is not None:
                 print(f"[{name}] Pricing configured: input=${input_price}/M, output=${output_price}/M")
 
+        # Log retry configuration
+        if max_retries > 0:
+            print(f"[{name}] Retry configured: max_retries={max_retries}, retry_delay={retry_delay}s")
+
         # Note: _register_methods should be called by subclasses after their initialization
 
     def _register_methods(self) -> None:
@@ -188,6 +212,44 @@ class BaseWorker(threading.Thread):
         # Subclasses should override this to register their methods
         # Default implementation does nothing (not raise error)
         pass
+
+    def _should_retry(self, exception: Exception) -> bool:
+        """
+        Determine if an exception should trigger a retry.
+
+        Args:
+            exception: The exception that was raised
+
+        Returns:
+            True if the exception is retryable, False otherwise
+        """
+        # Check if it's a non-retryable exception type
+        for exc_type in self.NON_RETRYABLE_EXCEPTIONS:
+            if isinstance(exception, exc_type):
+                return False
+
+        # Check for specific exception patterns
+        exc_str = str(exception).lower()
+
+        # Network/timeout errors are retryable
+        retryable_patterns = [
+            'timeout',
+            'connection',
+            'network',
+            'temporary',
+            'unavailable',
+            'rate limit',
+            '429',  # HTTP 429 Too Many Requests
+            '503',  # HTTP 503 Service Unavailable
+            '502',  # HTTP 502 Bad Gateway
+        ]
+
+        for pattern in retryable_patterns:
+            if pattern in exc_str:
+                return True
+
+        # Default to retry for unknown exceptions (can be overridden)
+        return True
 
     def submit(self, method: str, *args, **kwargs) -> Future:
         """
@@ -213,6 +275,45 @@ class BaseWorker(threading.Thread):
         self._queue.put(task)
         return future
 
+    def _execute_task_with_retry(self, task: Task) -> None:
+        """
+        Execute a task with retry logic.
+
+        Args:
+            task: The task to execute
+        """
+        last_exception = None
+
+        for attempt in range(self._max_retries + 1):
+            try:
+                if task.method not in self._methods:
+                    raise ValueError(f"Unknown method: {task.method}")
+
+                method = self._methods[task.method]
+                result = method(*task.args, **task.kwargs)
+
+                # Success!
+                if attempt > 0:
+                    print(f"[{self.name}] Task {task.id[:8]} succeeded after {attempt} retries")
+                task.future.set_result(result)
+                return
+
+            except Exception as e:
+                last_exception = e
+                should_retry = self._should_retry(e) and attempt < self._max_retries
+
+                if should_retry:
+                    self._total_retries += 1
+                    print(f"[{self.name}] Task {task.id[:8]} failed (attempt {attempt + 1}/{self._max_retries + 1}): {e}, retrying in {self._retry_delay}s...")
+                    time.sleep(self._retry_delay)
+                else:
+                    # No more retries or non-retryable exception
+                    if attempt > 0:
+                        print(f"[{self.name}] Task {task.id[:8]} failed after {attempt + 1} attempts: {e}")
+                    self._total_failures += 1
+                    task.future.set_exception(e)
+                    return
+
     def run(self) -> None:
         """Main worker loop."""
         print(f"[{self.name}] Worker started")
@@ -224,21 +325,11 @@ class BaseWorker(threading.Thread):
                 continue
 
             # Apply rate limiting
-            # Estimate token count based on method (can be overridden)
             tokens = self._estimate_tokens(task)
             self._rate_limiter.acquire(tokens=tokens, block=True)
 
-            # Process the task
-            try:
-                if task.method not in self._methods:
-                    raise ValueError(f"Unknown method: {task.method}")
-
-                method = self._methods[task.method]
-                result = method(*task.args, **task.kwargs)
-                task.future.set_result(result)
-
-            except Exception as e:
-                task.future.set_exception(e)
+            # Process the task with retry
+            self._execute_task_with_retry(task)
 
         # Process remaining tasks in queue before shutdown (graceful shutdown)
         while True:
@@ -251,17 +342,8 @@ class BaseWorker(threading.Thread):
             tokens = self._estimate_tokens(task)
             self._rate_limiter.acquire(tokens=tokens, block=True)
 
-            # Process the task
-            try:
-                if task.method not in self._methods:
-                    raise ValueError(f"Unknown method: {task.method}")
-
-                method = self._methods[task.method]
-                result = method(*task.args, **task.kwargs)
-                task.future.set_result(result)
-
-            except Exception as e:
-                task.future.set_exception(e)
+            # Process the task with retry
+            self._execute_task_with_retry(task)
 
         print(f"[{self.name}] Worker stopped")
 
@@ -303,6 +385,10 @@ class BaseWorker(threading.Thread):
         if self._cost_tracker.request_count > 0:
             print(f"[{self.name}] Cost summary: {self._cost_tracker.get_summary()}")
 
+        # Print retry statistics
+        if self._max_retries > 0 and (self._total_retries > 0 or self._total_failures > 0):
+            print(f"[{self.name}] Retry statistics: total_retries={self._total_retries}, total_failures={self._total_failures}")
+
     def get_status(self) -> dict:
         """Get the current status of the worker."""
         return {
@@ -330,3 +416,22 @@ def get_rate_limit_config(prefix: str) -> tuple:
     tpm = int(tpm) if tpm else None
 
     return rpm, tpm
+
+
+def get_retry_config(prefix: str) -> Tuple[int, float]:
+    """
+    Get retry configuration from environment variables.
+
+    Args:
+        prefix: Environment variable prefix (e.g., 'OCR', 'ASR', 'SUMMARIZATION')
+
+    Returns:
+        Tuple of (max_retries, retry_delay) - (0, 1.0) if not configured
+    """
+    max_retries = os.environ.get(f'{prefix}_MAX_RETRIES')
+    retry_delay = os.environ.get(f'{prefix}_RETRY_DELAY')
+
+    max_retries = int(max_retries) if max_retries else 0
+    retry_delay = float(retry_delay) if retry_delay else 1.0
+
+    return max_retries, retry_delay

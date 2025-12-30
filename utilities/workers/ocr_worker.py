@@ -12,7 +12,7 @@ import time
 from typing import Optional, Tuple
 from openai import OpenAI
 
-from ..worker import BaseWorker, get_rate_limit_config
+from ..worker import BaseWorker, get_rate_limit_config, get_retry_config
 from ..models import OCRResult, compute_file_hash, estimate_tokens
 
 
@@ -172,17 +172,24 @@ class OCRWorker(BaseWorker):
     def __init__(self,
                  dump_dir: pathlib.Path = pathlib.Path('.'),
                  dump_ocr_response: bool = True,
-                 max_retries: int = 2):
+                 max_retries: Optional[int] = None):
         """
         Initialize the OCR worker.
 
         Args:
             dump_dir: Directory to dump OCR responses
             dump_ocr_response: Whether to dump OCR responses to JSON
-            max_retries: Maximum number of retries for failed OCR attempts
+            max_retries: Maximum number of retries for failed OCR attempts (None = use env var)
         """
         rpm, tpm = get_rate_limit_config('OCR')
-        super().__init__(name='OCRWorker', rpm=rpm, tpm=tpm, pricing_prefix='OCR')
+        retry_max, retry_delay = get_retry_config('OCR')
+
+        # Use parameter if provided, otherwise use env var, default to 2 for OCR
+        if max_retries is None:
+            max_retries = retry_max if retry_max > 0 else 2
+
+        super().__init__(name='OCRWorker', rpm=rpm, tpm=tpm, pricing_prefix='OCR',
+                        max_retries=max_retries, retry_delay=retry_delay)
 
         self._dump_dir = dump_dir
         self._dump_ocr_response = dump_ocr_response
@@ -287,80 +294,64 @@ class OCRWorker(BaseWorker):
         with open(image_path, 'rb') as f:
             image_base64 = base64.b64encode(f.read()).decode('utf-8')
 
-        # Retry logic for OCR
-        for attempt in range(self._max_retries + 1):
-            try:
-                if self._use_deepseek:
-                    response = self._deepseek_ocr(image_base64, image_path)
-                else:
-                    response = self._generic_ocr(image_base64, image_path)
+        # Perform OCR (retry is handled by Worker level)
+        if self._use_deepseek:
+            response = self._deepseek_ocr(image_base64, image_path)
+        else:
+            response = self._generic_ocr(image_base64, image_path)
 
-                if not response.choices:
-                    raise RuntimeError(f'No choices returned from API for image {image_path}')
-                if not response.choices[0].message.content:
-                    raise RuntimeError(f'No content returned from API for image {image_path}')
+        if not response.choices:
+            raise RuntimeError(f'No choices returned from API for image {image_path}')
+        if not response.choices[0].message.content:
+            raise RuntimeError(f'No content returned from API for image {image_path}')
 
-                content = response.choices[0].message.content
-                # Strip outer markdown code block wrapper (Qwen models add this)
-                content = _strip_outer_markdown_block(content)
+        content = response.choices[0].message.content
+        # Strip outer markdown code block wrapper (Qwen models add this)
+        content = _strip_outer_markdown_block(content)
 
-                # Validate output
-                is_valid, issue = _validate_ocr_output(content)
-                if not is_valid:
-                    if attempt < self._max_retries:
-                        print(f'[OCR] Attempt {attempt + 1}/{self._max_retries + 1} failed: {issue}, retrying...')
-                        time.sleep(0.5)  # Brief delay before retry
-                        continue
-                    else:
-                        print(f'[OCR] All {self._max_retries + 1} attempts failed, using last result despite: {issue}')
-                        # Continue with the last result even if validation failed
+        # Validate output (raise exception for retry if validation fails)
+        is_valid, issue = _validate_ocr_output(content)
+        if not is_valid:
+            # Create a retryable error for Worker level retry
+            raise RuntimeError(f'OCR output validation failed: {issue}')
 
-                # Detect and fix duplicates
-                content, had_duplicates = _detect_and_fix_duplicates(content)
-                if had_duplicates:
-                    print(f'[OCR] Duplicates detected and removed in output')
+        # Detect and fix duplicates
+        content, had_duplicates = _detect_and_fix_duplicates(content)
+        if had_duplicates:
+            print(f'[OCR] Duplicates detected and removed in output')
 
-                token_count = response.usage.total_tokens if response.usage else estimate_tokens(len(content))
+        token_count = response.usage.total_tokens if response.usage else estimate_tokens(len(content))
 
-                # Track usage and cost
-                if response.usage:
-                    input_tokens = response.usage.prompt_tokens
-                    output_tokens = response.usage.completion_tokens
-                    cost = self._track_usage(input_tokens, output_tokens)
-                    cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
-                    print(f'OCR Done for image: {image_path}, length: {len(content)}, '
-                          f'usage: {input_tokens} in + {output_tokens} out = {token_count} total, cost: {cost_str}')
-                else:
-                    print(f'OCR Done for image: {image_path}, length: {len(content)}')
+        # Track usage and cost
+        if response.usage:
+            input_tokens = response.usage.prompt_tokens
+            output_tokens = response.usage.completion_tokens
+            cost = self._track_usage(input_tokens, output_tokens)
+            cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
+            print(f'OCR Done for image: {image_path}, length: {len(content)}, '
+                  f'usage: {input_tokens} in + {output_tokens} out = {token_count} total, cost: {cost_str}')
+        else:
+            print(f'OCR Done for image: {image_path}, length: {len(content)}')
 
-                # Create structured result
-                result = OCRResult(
-                    file_path=str(image_path),
-                    file_hash=file_hash,
-                    page_number=page_number,
-                    timestamp=os.path.getmtime(image_path),
-                    raw_text=content,
-                    sections=[],
-                    char_count=len(content),
-                    token_estimate=token_count
-                )
+        # Create structured result
+        result = OCRResult(
+            file_path=str(image_path),
+            file_hash=file_hash,
+            page_number=page_number,
+            timestamp=os.path.getmtime(image_path),
+            raw_text=content,
+            sections=[],
+            char_count=len(content),
+            token_estimate=token_count
+        )
 
-                if self._dump_ocr_response:
-                    dump_file_path = self._dump_dir.joinpath(f'{image_path.stem}.json')
-                    with open(dump_file_path, 'w') as f:
-                        f.write(response.model_dump_json(indent=4, ensure_ascii=False))
-                    print(f'Dumped OCR response to {dump_file_path}')
+        if self._dump_ocr_response:
+            dump_file_path = self._dump_dir.joinpath(f'{image_path.stem}.json')
+            with open(dump_file_path, 'w') as f:
+                f.write(response.model_dump_json(indent=4, ensure_ascii=False))
+            print(f'Dumped OCR response to {dump_file_path}')
 
-                return result
-
-            except Exception as e:
-                if attempt < self._max_retries:
-                    print(f'[OCR] Attempt {attempt + 1}/{self._max_retries + 1} failed with error: {e}, retrying...')
-                    time.sleep(0.5)
-                    continue
-                else:
-                    print(f'[OCR] All {self._max_retries + 1} attempts failed, raising error')
-                    raise
+        return result
 
     def _deepseek_ocr(self, image_base64: str, image_path: pathlib.Path):
         """DeepSeek OCR implementation."""
