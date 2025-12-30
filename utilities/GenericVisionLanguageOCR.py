@@ -7,9 +7,12 @@ from openai import OpenAI
 
 class GenericVL:
     def __init__(self, dump_dir: pathlib.Path = pathlib.Path('.'), dump_ocr_response: bool = True) -> None:
+        # Use OCR-specific config if available, otherwise fall back to legacy config
+        api_url = os.environ.get('OCR_API_URL', os.environ.get('OPENAI_LIKE_API_URL'))
+        api_key = os.environ.get('OCR_API_KEY', os.environ.get('OPENAI_LIKE_API_KEY'))
         self.__client = OpenAI(
-            base_url=f'{os.environ["OPENAI_LIKE_API_URL"]}',
-            api_key=f'{os.environ["OPENAI_LIKE_API_KEY"]}'
+            base_url=api_url,
+            api_key=api_key
         )
         if dump_ocr_response:
             dump_dir.mkdir(parents=True, exist_ok=True)
@@ -70,5 +73,5 @@ class GenericVL:
             else:
                 dump_file_path = self.__dump_dir.joinpath(f'{image_path.stem}.json')
                 with open(dump_file_path, 'w') as dump_file:
-                    json.dump(response.model_dump(), dump_file, ensure_ascii=False, indent=4)
+                    dump_file.write(response.model_dump_json(indent=4, ensure_ascii=False))
                 return response.choices[0].message.content

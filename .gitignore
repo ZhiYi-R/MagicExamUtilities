@@ -16,7 +16,11 @@ wheels/
 # dotenv files
 .env
 
+# AI assistant documentation
+CLAUDE.md
+
 # Miscellaneous
 .DS_Store
 cache/
 output/
+input/

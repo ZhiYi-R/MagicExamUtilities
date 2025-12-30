@@ -12,22 +12,25 @@ class TextSource(Enum):
 
 class Summarization:
     def __init__(self, text_source: TextSource, dump_dir: Path = Path('.'), dump_summarization_response: bool = True) -> None:
+        # Use Summarization-specific config if available, otherwise fall back to legacy config
+        api_url = os.environ.get('SUMMARIZATION_API_URL', os.environ.get('OPENAI_LIKE_API_URL'))
+        api_key = os.environ.get('SUMMARIZATION_API_KEY', os.environ.get('OPENAI_LIKE_API_KEY'))
         self.__client = OpenAI(
-            base_url = os.environ['OPENAI_LIKE_API_URL'],
-            api_key = os.environ['OPENAI_LIKE_API_KEY']
+            base_url=api_url,
+            api_key=api_key
         )
         self.__dump_dir = dump_dir
         self.__dump_summarization_response = dump_summarization_response
         if text_source == TextSource.OCR:
             self.__text_prompt = '''
             你是一个专业的AI助手，专门为OCR识别出的文本进行纠错和总结，你的行为守则如下：
-            1. 输出结果为Markdown格式。
+            1. 输出结果为Markdown文本。
             2. 输出结果中应当包含原始文本中的所有关键信息，不要缺少任何重要的信息。
             3. 确保你的输出只包含简体中文，如果原文是别的语言，确保你已经进行了翻译。
-            4. 请确保你的公式输出正确，请使用LaTeX格式。
+            4. 请确保你的公式输出正确，并LaTeX格式嵌入到文本中。
             5. 请确保你的表格输出正确，请使用Markdown格式。
             6. 如果内容是复习课，确保你输出的文本包含复习的所有内容，不要缺少任何重要的信息，如果其讲的不够详细，请补充其详细内容。
-            7. 你的输出除了报告的Markdown文本外，请不要输出任何多余的文本（直接输出Markdown源码，不要包裹任何代码块之类的东西)。
+            7. 你的输出应当仅包含Markdown源码本身。
             '''
         elif text_source == TextSource.STT:
             self.__text_prompt = '''
@@ -69,6 +72,6 @@ class Summarization:
         if self.__dump_summarization_response:
             dump_file_path = self.__dump_dir.joinpath(f'Summarization_{time.strftime("%Y_%m_%d-%H_%M_%S")}.json')
             with open(dump_file_path, 'w') as f:
-                json.dump(response.model_dump_json(), f, ensure_ascii=False, indent=4)
+                f.write(response.model_dump_json(indent=4, ensure_ascii=False))
                 print(f'Dumped summarization response to {dump_file_path}')
         return response.choices[0].message.content

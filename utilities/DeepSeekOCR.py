@@ -7,9 +7,12 @@ from openai import OpenAI
 
 class DeepSeekOCR:
     def __init__(self, dump_dir: pathlib.Path = pathlib.Path('.'), dump_ocr_response: bool = True) -> None:
+        # Use OCR-specific config if available, otherwise fall back to legacy config
+        api_url = os.environ.get('OCR_API_URL', os.environ.get('OPENAI_LIKE_API_URL'))
+        api_key = os.environ.get('OCR_API_KEY', os.environ.get('OPENAI_LIKE_API_KEY'))
         self.__client = OpenAI(
-            base_url=f'{os.environ["OPENAI_LIKE_API_URL"]}',
-            api_key=f'{os.environ["OPENAI_LIKE_API_KEY"]}'
+            base_url=api_url,
+            api_key=api_key
         )
         # Do NOT change prompt, since deepseek ocr is extremely sensitive to prompt
         self.__text_prompt = '<image>\nOCR this image with Markdown format.'
@@ -61,7 +64,7 @@ class DeepSeekOCR:
         else:
             dump_file_path = self.__dump_dir.joinpath(f'{image_path.stem}.json')
             with open(dump_file_path, 'w') as f:
-                json.dump(response.model_dump_json(), f, ensure_ascii=False, indent=4)
+                f.write(response.model_dump_json(indent=4, ensure_ascii=False))
                 print(f'Dumped OCR response to {dump_file_path}')
             return response.choices[0].message.content
         

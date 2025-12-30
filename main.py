@@ -45,7 +45,7 @@ if __name__ == '__main__':
         for pdf_path in file_to_processs:
             dump_path = dump_dir_base.joinpath(pdf_path.stem)
             dump_path.mkdir(parents=True, exist_ok=True)
-            image_pathes.extend(dump_pdf(pdf_path, dump_path.joinpath('images')))
+            image_pathes.extend(dump_pdf(pdf_path, dump_path))
         ocr_dump_path = dump_dir_base.joinpath('ocr')
         ocr_dump_path.mkdir(parents=True, exist_ok=True)
         json_dump = False
