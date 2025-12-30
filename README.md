@@ -1,41 +1,121 @@
 # 妙妙期末小工具
 
-本项目基于[GPL v3.0](https://www.gnu.org/licenses/gpl-3.0.html)协议开源，Don't be an asshole!
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
+[English](README_en.md) | 简体中文
 
-## What is this
+---
 
-本项目旨在构建一个用AI辅助期末复习的工具（没有作弊功能），当前已经实现的功能有：
+## 项目简介
 
-1. 从老师的复习课录音生成复习（预习）笔记
-2. 从老师的教学PPT生成复习(预习)笔记
-3. **Ask AI**：从已经生成的笔记和原文提供的上下文中回答问题
-4. **知识库管理**：按科目分组管理 PDF，支持独立索引和搜索
-5. **缓存功能**：基于文件哈希的智能缓存，避免重复处理
-6. **分块总结**：处理超长文本，突破模型上下文窗口限制
+本项目是一个用 AI 辅助期末复习的工具，帮助从课程材料中自动生成复习笔记。
 
-计划实现的功能有：
+**注意：本工具仅用于学习辅助，不包含任何作弊功能。**
 
-1. 往年题&作业题库：从往年的作业题和作业题库生成复习（预习）题和答案解析
+### 主要功能
 
-## But how to use it?
+| 功能 | 描述 |
+|------|------|
+| **PDF 处理** | 从教学 PPT 生成结构化复习笔记 |
+| **音频处理** | 从复习课录音生成复习笔记 |
+| **Ask AI** | 基于已处理内容回答问题，支持知识库隔离 |
+| **知识库管理** | 按科目分组管理 PDF，独立索引和搜索 |
+| **智能缓存** | 基于文件哈希的缓存，避免重复处理 |
+| **分块总结** | 处理超长文本，突破模型上下文窗口限制 |
 
-1. 从任何一个提供OpenAI Like API的LLM提供商获取一个API Key
-2. 将.env.example文件重命名为.env, 并修改其中的配置项
-3. 使用 [uv](https://docs.astral.sh/uv/) 初始化项目:
+---
+
+## 快速开始
+
+### 前置要求
+
+- Python 3.10+
+- [uv](https://docs.astral.sh/uv/) (推荐的 Python 包管理器)
+- poppler-utils (PDF 处理依赖)
+
+### 一键安装 (推荐)
 
 ```bash
+# 克隆项目
+git clone https://github.com/yourusername/MagicExamUtilities.git
+cd MagicExamUtilities
+
+# 创建虚拟环境并安装依赖
 uv venv .venv
-. .venv/bin/activate.sh
+source .venv/bin/activate.sh  # Windows: .venv\Scripts\activate
 uv pip install -e .
 ```
 
-**注意：**
+### 安装 poppler
 
-- activate具体使用哪个文件取决于你的shell，具体可参考uv文档
-- 本项目依赖于pdf2image, 而pdf2image又依赖于poppler，因此你自行需要安装poppler。具体见[pdf2image文档](https://pdf2image.readthedocs.io/en/latest/installation.html#installing-poppler)
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install poppler-utils
+```
 
+**macOS:**
+```bash
+brew install poppler
+```
 
-4. 运行项目：
+**Windows:**
+下载并安装 [poppler for Windows](https://github.com/oschwartz10612/poppler-windows/releases/)
+
+---
+
+## 配置指南
+
+### 1. 获取 API Key
+
+本工具需要使用支持 OpenAI 兼容 API 的 LLM 服务。推荐的服务商：
+
+| 服务商 | 网址 | 推荐模型 |
+|--------|------|----------|
+| 硅基流动 | https://siliconflow.cn | Qwen3-Next-80B-A3B-Instruct |
+| DeepSeek | https://platform.deepseek.com | DeepSeek-V3 |
+
+### 2. 配置环境变量
+
+复制示例配置文件并填入你的 API 信息：
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env` 文件，配置以下必要项：
+
+```bash
+# === OCR 配置 (PDF 处理) ===
+OCR_API_URL=https://api.siliconflow.cn/v1
+OCR_API_KEY=your_api_key_here
+OCR_MODEL=deepseek-ai/DeepSeek-OCR
+
+# === 总结配置 (生成笔记) ===
+SUMMARIZATION_API_URL=https://api.siliconflow.cn/v1
+SUMMARIZATION_API_KEY=your_api_key_here
+SUMMARIZATION_MODEL=Qwen/Qwen3-Next-80B-A3B-Instruct
+
+# === ASR 配置 (音频处理，可选) ===
+ASR_API_URL=https://api.siliconflow.cn/v1/audio/transcriptions
+ASR_API_KEY=your_api_key_here
+ASR_MODEL=TeleAI/TeleSpeechASR
+
+# === Ask AI 配置 (问答功能) ===
+ASK_AI_API_URL=https://api.siliconflow.cn/v1
+ASK_AI_API_KEY=your_api_key_here
+ASK_AI_MODEL=Qwen/Qwen3-Next-80B-A3B-Instruct
+```
+
+### 3. 验证配置
+
+运行以下命令验证配置是否正确：
+
+```bash
+python -c "from dotenv import load_dotenv; load_dotenv(); import os; print('OCR Model:', os.getenv('OCR_MODEL'))"
+```
+
+---
+
+## 使用方法
 
 ### GUI 模式 (推荐)
 
@@ -43,55 +123,120 @@ uv pip install -e .
 python main.py --gui
 ```
 
-GUI 模式将在浏览器中打开 Web 界面，提供更友好的用户体验：
-- 支持拖拽上传文件
-- 实时进度显示
-- 结果预览和下载
+浏览器会自动打开 Web 界面，提供以下功能：
+
+#### 1. PDF 处理
+- 上传 PDF 文件 (支持多文件)
+- 可选择输出目录
+- 启用缓存加速重复处理
+- 高级选项：启用分块总结处理超长文档
+
+#### 2. 音频处理
+- 上传 MP3 录音文件
+- 自动转录并生成笔记
+
+#### 3. Ask AI
+- 输入问题，AI 从已处理内容中检索并回答
+- 可选择特定知识库限定搜索范围
+
+#### 4. 知识库管理
+- 创建知识库 (按科目分组)
+- 添加/移除 PDF 文档
+- 重建搜索索引
 
 ### CLI 模式
 
 ```bash
-python main.py --type [audio|pdf] --input [input_files] --output [output_dir]
+# 处理 PDF
+python main.py --type pdf --input slides/*.pdf --output ./notes
+
+# 处理音频
+python main.py --type audio --input recording.mp3 --output ./notes
+
+# 指定缓存目录
+python main.py --type pdf --input file.pdf --output ./notes --dump-dir ./cache
 ```
 
-| 参数 | 描述 |
-| --- | --- |
-| --gui | 启动 GUI 模式 |
-| --type | 输入文件类型，可选值为audio和pdf (CLI 模式必需) |
-| --input | 输入文件路径，支持通配符 (CLI 模式必需) |
-| --output | 输出目录 (CLI 模式必需) |
-| --dump | 是否将中间结果保存到cache中 (默认: True) |
-| --no-dump | 不保存中间结果 |
-| --dump-dir | cache目录 (默认: ./cache/) |
+---
 
-## FAQ
+## 常见问题
 
-### 为什么我的笔记非常的诡异？
+### Q: 为什么生成的笔记质量不佳？
 
-这通常出现在STT模式下，由于录音环境的问题，STT的结果通常非常破碎，因此需要足够强大的模型来处理这样的文本，以获得更准确的结果。目前笔者测试成功的模型有：
+**A:** 这通常取决于：
+1. **模型选择** - 推荐使用 `Qwen3-Next-80B-A3B-Instruct` 或 `DeepSeek-V3`
+2. **音频质量** - 录音环境嘈杂会导致 STT 结果破碎
+3. **PDF 质量** - 扫描件或图片质量差会影响 OCR 效果
 
-- Qwen3-Next-80B-A3B-Instruct
-- DeepSeek-V3.2-Exp
-- Gemini-2.5-Flash (这部分需要自行适配Gemini的API)
+### Q: STT 请求失败怎么办？
 
-推荐使用Qwen3-Next-80B-A3B-Instruct模型，它在总结效果和价格上取得了一个不错的平衡，且推理速度非常快。
+**A:** 本工具目前仅适配了硅基流动的 ASR API。如需使用其他服务，请检查 `.env` 中的 `ASR_API_URL` 是否正确。
 
-### 为什么我的STT请求失败了
+### Q: 如何处理超长文档？
 
-实际上笔者只适配了硅基流动的ASR模型，如果需要使用别家的模型，需要自行适配。此外，ASR_API_URL作为独立的配置项出现的原因是ASR模型的URL地址需要填写完整，例如：
-[https://api.siliconflow.cn/v1/audio/transcriptions](https://api.siliconflow.cn/v1/audio/transcriptions)
+**A:** 在 GUI 中展开"高级选项"，勾选"启用分块总结"。文档会自动分块处理，突破模型上下文窗口限制。
 
-## Changelog
+### Q: 缓存文件在哪里？
+
+**A:** 默认存储在 `./cache/` 目录，包含：
+- `ocr/` - OCR 结果缓存
+- `stt/` - STT 结果缓存
+- `knowledge_bases.json` - 知识库配置
+- `kb_indices/` - 知识库索引
+
+---
+
+## 功能详解
+
+### 知识库管理
+
+创建知识库可以按科目组织 PDF，实现独立搜索：
+
+```
+1. 在"知识库管理"标签页创建知识库
+2. 选择相关的 PDF 文档加入
+3. 系统自动构建语义索引
+4. 在 Ask AI 中选择该知识库进行问答
+```
+
+### 分块总结
+
+当文档超过模型上下文窗口时：
+
+1. 文档自动按段落/句子分块
+2. 每块独立生成总结
+3. 合并所有总结
+4. 如合并结果仍过长，进行二次总结
+
+---
+
+## 开发计划
+
+- [ ] 往年题&作业题库：从往年作业生成复习题和答案解析
+- [ ] 更多 ASR 服务适配
+- [ ] 导出 Anki 卡片格式
+
+---
+
+## 开源协议
+
+本项目基于 [GPL v3.0](https://www.gnu.org/licenses/gpl-3.0.html) 协议开源。
+
+**Don't be an asshole!**
+
+---
+
+## 更新日志
+
+详见 [Changelog](#changelog) 章节。
 
 ### [0.7.0] - 2024-12-30
 
 **新增：知识库管理系统**
-- 新增 `utilities/knowledge_base/` 模块：知识库管理功能
-  - `manager.py`: KnowledgeBaseManager，管理知识库的 CRUD 操作
-  - `models.py`: KnowledgeBase 数据模型和存储
+- 新增 `utilities/knowledge_base/` 模块
 - 支持按科目创建知识库，独立管理 PDF 文档
 - 支持为每个知识库构建独立的语义搜索索引
-- GUI 新增"知识库管理"标签页，提供可视化管理界面
+- GUI 新增"知识库管理"标签页
 
 **新增：Ask AI 功能**
 - 新增 `utilities/workers/ask_ai_worker.py`：基于 LangChain 的 AI 问答 Worker
@@ -118,17 +263,6 @@ python main.py --type [audio|pdf] --input [input_files] --output [output_dir]
   - `cache_loader.py`: 缓存加载器
 - `utilities/workers/ask_ai_worker.py`: Ask AI Worker
 
-**使用方式：**
-```bash
-# GUI 模式 (推荐)
-python main.py --gui
-
-# 新功能：
-# - Ask AI: 基于已处理内容回答问题
-# - 知识库管理: 按科目分组管理 PDF
-# - 分块总结: 处理超长文本
-```
-
 ### [0.6.0] - 2024-12-30
 
 **新增：Gradio Web GUI**
@@ -141,15 +275,6 @@ python main.py --gui
 - `gui.py`: GradioApp 类，管理 GUI 生命周期和 Worker 初始化
 - `main.py`: 支持 GUI/CLI 双模式启动
 
-**使用方式：**
-```bash
-# GUI 模式 (推荐)
-python main.py --gui
-
-# CLI 模式
-python main.py --type pdf --input *.pdf --output ./output
-```
-
 ### [0.5.0] - 2024-12-30
 
 **新增：OCR 缓存与结构化数据存储**
@@ -159,47 +284,17 @@ python main.py --type pdf --input *.pdf --output ./output
 - main.py PDF 处理管线现在支持缓存，避免重复 OCR 处理
 - 缓存基于 PDF 文件的 MD5 哈希，支持缓存有效性验证（修改时间检查）
 
-**架构变更：**
-- `utilities/models.py`: 数据模型定义，包含 JSON 序列化/反序列化
-- `utilities/cache.py`: OCRCache 管理器，提供 `get_pdf_cache()` 和 `save_pdf_cache()` 方法
-- `utilities/workers/ocr_worker.py`: 新增 `_ocr_structured()` 和 `process_images_structured()` 方法
-- `main.py`: `process_pdf_pipeline()` 现在使用缓存和结构化 OCR 结果
-
-**测试：**
-- 所有 100 个单元测试通过
-- 代码覆盖率提升至 94%（models.py 100%, cache.py 96%）
-
 ### [0.4.0] - 2024-12-30
 
 **重构：精简架构，PDF 处理合并到 main.py**
 - 将 DumpPDF 的 PDF 转图片逻辑合并到 main.py
-- 删除 `utilities/DumpPDF.py`，所有 PDF 处理逻辑集中在 main.py 的 `convert_pdf_to_images` 函数
-- 代码覆盖率提升至 94%
-
-**架构简化：**
-- `main.py`: 新增 `convert_pdf_to_images` 函数，处理 PDF 到图片的转换
-- 删除：`utilities/DumpPDF.py`
-
-**测试：**
-- 所有 60 个单元测试通过
-- 代码覆盖率：91% → 94%
+- 删除 `utilities/DumpPDF.py`
 
 ### [0.3.0] - 2024-12-30
 
 **重构：精简架构，所有逻辑合并到 Worker**
 - 将 DeepSeekOCR、GenericVL、STT、Summarization 的逻辑直接合并到各自的 Worker 中
 - 删除冗余的中间层类，简化代码结构
-- 代码覆盖率提升至 91%
-
-**架构简化：**
-- `utilities/workers/ocr_worker.py`: 包含所有 OCR 逻辑（DeepSeek + GenericVL）
-- `utilities/workers/stt_worker.py`: 包含所有 STT 逻辑
-- `utilities/workers/summarization_worker.py`: 包含所有 Summarization 逻辑和 TextSource 枚举
-- 删除：`DeepSeekOCR.py`, `GenericVisionLanguageOCR.py`, `STT.py`, `Summarization.py`
-
-**测试：**
-- 更新所有测试以适应新架构
-- 所有 60 个单元测试通过
 
 ### [0.2.0] - 2024-12-30
 
@@ -208,21 +303,6 @@ python main.py --type pdf --input *.pdf --output ./output
 - 新增基于令牌桶算法的 RPM/TPM 流控机制
 - 为每个服务添加独立的 API 配置（URL、Key、Model）
 - 实现优雅关闭，确保队列中的任务完成后再退出
-
-**新增配置项：**
-- `OCR_API_URL` / `OCR_API_KEY` / `OCR_RPM` / `OCR_TPM`
-- `SUMMARIZATION_API_URL` / `SUMMARIZATION_API_KEY` / `SUMMARIZATION_RPM` / `SUMMARIZATION_TPM`
-- ASR 服务保持原有独立配置
-
-**测试：**
-- 新增完整的单元测试框架 (pytest)
-- 60 个单元测试，覆盖核心功能
-- 代码覆盖率约 70%
-
-**架构变更：**
-- `utilities/rate_limiter.py`: 令牌桶流控实现
-- `utilities/worker.py`: Worker 基类
-- `utilities/workers/`: OCRWorker, STTWorker, SummarizationWorker
 
 ### [0.1.0] - 2024-12-21
 
