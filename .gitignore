@@ -20,6 +20,11 @@ wheels/
 CLAUDE.md
 plan.md
 
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
 # Miscellaneous
 .DS_Store
 cache/

@@ -38,6 +38,9 @@ class SummarizationWorker(BaseWorker):
             dump_summarization_response=dump_summarization_response
         )
 
+        # Register methods after Summarization is initialized
+        self._register_methods()
+
         print(f"[SummarizationWorker] Initialized with text_source={text_source}")
         print(f"[SummarizationWorker] Rate limits: RPM={rpm}, TPM={tpm}")
 

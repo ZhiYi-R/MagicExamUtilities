@@ -34,6 +34,9 @@ class STTWorker(BaseWorker):
             dump_stt_response=dump_stt_response
         )
 
+        # Register methods after STT is initialized
+        self._register_methods()
+
         print(f"[STTWorker] Initialized")
         print(f"[STTWorker] Rate limits: RPM={rpm}, TPM={tpm}")
 

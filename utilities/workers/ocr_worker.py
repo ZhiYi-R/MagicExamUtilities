@@ -52,6 +52,9 @@ class OCRWorker(BaseWorker):
             )
             self._ocr_type = 'generic'
 
+        # Register methods after OCR is initialized
+        self._register_methods()
+
         print(f"[OCRWorker] Initialized with {self._ocr_type} OCR")
         print(f"[OCRWorker] Rate limits: RPM={rpm}, TPM={tpm}")
 

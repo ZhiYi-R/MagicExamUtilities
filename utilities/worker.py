@@ -97,12 +97,13 @@ class BaseWorker(threading.Thread):
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
         self._methods: Dict[str, Callable] = {}
-        self._register_methods()
+        # Note: _register_methods should be called by subclasses after their initialization
 
     def _register_methods(self) -> None:
         """Register methods that can be called by tasks."""
         # Subclasses should override this to register their methods
-        raise NotImplementedError("Subclasses must implement _register_methods")
+        # Default implementation does nothing (not raise error)
+        pass
 
     def submit(self, method: str, *args, **kwargs) -> Future:
         """
@@ -140,6 +141,29 @@ class BaseWorker(threading.Thread):
 
             # Apply rate limiting
             # Estimate token count based on method (can be overridden)
+            tokens = self._estimate_tokens(task)
+            self._rate_limiter.acquire(tokens=tokens, block=True)
+
+            # Process the task
+            try:
+                if task.method not in self._methods:
+                    raise ValueError(f"Unknown method: {task.method}")
+
+                method = self._methods[task.method]
+                result = method(*task.args, **task.kwargs)
+                task.future.set_result(result)
+
+            except Exception as e:
+                task.future.set_exception(e)
+
+        # Process remaining tasks in queue before shutdown (graceful shutdown)
+        while True:
+            try:
+                task = self._queue.get_nowait()
+            except Empty:
+                break
+
+            # Apply rate limiting
             tokens = self._estimate_tokens(task)
             self._rate_limiter.acquire(tokens=tokens, block=True)
 

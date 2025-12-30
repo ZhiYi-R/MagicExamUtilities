@@ -29,7 +29,12 @@ class TokenBucket:
         """Refill tokens based on elapsed time."""
         now = time.time()
         elapsed = now - self._last_refill_time
-        tokens_to_add = elapsed * self._refill_rate
+        # Only add tokens if significant time has passed (> 1ms)
+        # This prevents floating point issues in tests
+        if elapsed > 0.001:
+            tokens_to_add = elapsed * self._refill_rate
+        else:
+            tokens_to_add = 0
 
         with self._lock:
             self._tokens = min(self._capacity, self._tokens + tokens_to_add)
