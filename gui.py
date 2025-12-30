@@ -15,7 +15,7 @@ from typing import Optional, List, Tuple
 import gradio as gr
 from dotenv import load_dotenv
 
-from utilities.workers import OCRWorker, STTWorker, SummarizationWorker, TextSource
+from utilities.workers import OCRWorker, STTWorker, SummarizationWorker, TextSource, AskAIWorker
 from utilities.cache import OCRCache
 
 
@@ -40,6 +40,7 @@ class GradioApp:
         self._ocr_worker = None
         self._stt_worker = None
         self._summarization_worker = None
+        self._ask_ai_worker = None
         self._ocr_cache = None
 
         # Processing state
@@ -89,6 +90,11 @@ class GradioApp:
             self._summarization_worker.shutdown(wait=True, timeout=30)
             self._summarization_worker = None
             print("[GUI] Summarization worker stopped")
+
+        if self._ask_ai_worker:
+            self._ask_ai_worker.shutdown(wait=True, timeout=30)
+            self._ask_ai_worker = None
+            print("[GUI] Ask AI worker stopped")
 
     def _process_pdf(
         self,
@@ -343,6 +349,48 @@ class GradioApp:
         finally:
             self._is_processing = False
 
+    def _ask_ai(
+        self,
+        question: str,
+        progress=gr.Progress()
+    ) -> str:
+        """
+        Process a question using Ask AI.
+
+        Args:
+            question: User's question
+            progress: Gradio progress tracker
+
+        Returns:
+            Answer to the question
+        """
+        if not question or not question.strip():
+            return "错误: 请输入问题"
+
+        try:
+            progress(0.1, desc="初始化 Ask AI...")
+
+            # Initialize Ask AI worker
+            if not self._ask_ai_worker:
+                self._ask_ai_worker = AskAIWorker(cache_dir=self._dump_dir, dump_ask_ai_response=True)
+                self._ask_ai_worker.start()
+                print("[GUI] Ask AI worker started")
+
+            progress(0.3, desc="正在思考...")
+
+            # Ask the question
+            answer = self._ask_ai_worker.ask(question, timeout=300)
+
+            progress(1.0, desc="完成!")
+
+            return answer
+
+        except Exception as e:
+            import traceback
+            error_msg = f"处理失败: {str(e)}\n\n{traceback.format_exc()}"
+            print(error_msg)
+            return error_msg
+
     def build_ui(self):
         """Build the Gradio UI."""
         with gr.Blocks(title="妙妙期末小工具") as app:
@@ -453,6 +501,40 @@ class GradioApp:
                         outputs=audio_download
                     )
 
+                # Ask AI Tab
+                with gr.Tab("Ask AI"):
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            ask_question = gr.Textbox(
+                                label="问题",
+                                placeholder="请输入您的问题...",
+                                lines=3
+                            )
+                            ask_process_btn = gr.Button(
+                                "提问",
+                                variant="primary",
+                                size="lg"
+                            )
+                            gr.Examples(
+                                examples=[
+                                    "MySQL 的安装步骤是什么？",
+                                    "Java 中 JDBC 和 PreparedStatement 有什么区别？",
+                                    "总结一下多线程的核心概念",
+                                    "找出所有关于数据库配置的内容"
+                                ],
+                                inputs=ask_question
+                            )
+
+                        with gr.Column(scale=1):
+                            ask_answer = gr.Markdown(label="回答")
+
+                    ask_process_btn.click(
+                        fn=self._ask_ai,
+                        inputs=[ask_question],
+                        outputs=[ask_answer],
+                        show_progress="full"
+                    )
+
             gr.Markdown(
                 """
                 ---
@@ -460,6 +542,7 @@ class GradioApp:
                 **提示**:
                 - PDF 处理: 支持多文件上传，自动使用缓存加速重复处理
                 - 音频处理: 支持 MP3 格式录音文件
+                - Ask AI: 基于已缓存的 PDF/音频内容回答问题，需要先处理文档才能使用
                 - 处理时间取决于文件大小和 API 响应速度
                 """
             )

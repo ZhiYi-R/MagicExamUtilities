@@ -14,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pdf2image import convert_from_path
 
-from utilities.workers import OCRWorker, STTWorker, SummarizationWorker, TextSource
+from utilities.workers import OCRWorker, STTWorker, SummarizationWorker, TextSource, AskAIWorker
 from utilities.cache import OCRCache
 
 
@@ -22,11 +22,12 @@ from utilities.cache import OCRCache
 _ocr_worker = None
 _stt_worker = None
 _summarization_worker = None
+_ask_ai_worker = None
 
 
 def cleanup_workers():
     """Cleanup workers on exit."""
-    global _ocr_worker, _stt_worker, _summarization_worker
+    global _ocr_worker, _stt_worker, _summarization_worker, _ask_ai_worker
 
     print("\n[Main] Shutting down workers...")
 
@@ -36,6 +37,8 @@ def cleanup_workers():
         _stt_worker.shutdown(wait=True, timeout=30)
     if _summarization_worker:
         _summarization_worker.shutdown(wait=True, timeout=30)
+    if _ask_ai_worker:
+        _ask_ai_worker.shutdown(wait=True, timeout=30)
 
     print("[Main] Workers shut down complete")
 
@@ -241,6 +244,28 @@ def process_audio_pipeline(files: list[Path], dump_dir: Path, dump: bool, output
     print(f'[Main] Output written to: {output_file}')
 
 
+def process_ask_pipeline(question: str, dump_dir: Path) -> None:
+    """
+    Process a question using Ask AI with cached content.
+
+    Args:
+        question: User's question
+        dump_dir: Base directory for cache
+    """
+    global _ask_ai_worker
+
+    print(f'[Main] Asking AI: {question}')
+
+    # Initialize Ask AI worker
+    _ask_ai_worker = AskAIWorker(cache_dir=dump_dir, dump_ask_ai_response=True)
+    _ask_ai_worker.start()
+
+    # Ask the question
+    answer = _ask_ai_worker.ask(question, timeout=300)
+
+    print(f'\n[Main] Answer:\n{answer}')
+
+
 def main():
     """Main entry point."""
     load_dotenv()
@@ -250,6 +275,8 @@ def main():
     )
     parser.add_argument('--gui', action='store_true',
                         help='Launch GUI mode')
+    parser.add_argument('--ask', type=str, metavar='QUESTION',
+                        help='Ask a question using cached content (Ask AI mode)')
     parser.add_argument('--type', type=str, choices=['pdf', 'audio'],
                         help='Type of input file (required in CLI mode)')
     parser.add_argument('--input', type=str, nargs='+',
@@ -273,13 +300,21 @@ def main():
         app.launch(server_port=port)
         return
 
+    # Ask AI mode
+    if args.ask:
+        dump_dir = Path(args.dump_dir)
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        atexit.register(cleanup_workers)
+        process_ask_pipeline(args.ask, dump_dir)
+        return
+
     # CLI mode - validate required arguments
     if not args.type:
-        parser.error('--type is required in CLI mode (or use --gui for GUI mode)')
+        parser.error('--type is required in CLI mode (or use --ask for Ask AI mode or --gui for GUI mode)')
     if not args.input:
-        parser.error('--input is required in CLI mode (or use --gui for GUI mode)')
+        parser.error('--input is required in CLI mode (or use --ask for Ask AI mode or --gui for GUI mode)')
     if not args.output:
-        parser.error('--output is required in CLI mode (or use --gui for GUI mode)')
+        parser.error('--output is required in CLI mode (or use --ask for Ask AI mode or --gui for GUI mode)')
 
     # Validate input files
     files = validate_files(args.input, args.type)
