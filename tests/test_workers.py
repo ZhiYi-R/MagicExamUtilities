@@ -83,7 +83,8 @@ class TestOCRWorker:
         test_image.write_bytes(b"fake image data")
 
         result = worker.process_image(test_image, timeout=5.0)
-        assert result == "Test response"
+        # OCR mock returns longer content to pass validation
+        assert result == "# Test Document\n\nThis is a sample text with multiple words and diverse characters including symbols like !@#$% and numbers 12345."
 
         worker.shutdown(wait=True, timeout=2.0)
 
@@ -104,7 +105,91 @@ class TestOCRWorker:
 
         results = worker.process_images(images, timeout_per_image=5.0)
         assert len(results) == 3
-        assert all(r == "Test response" for r in results)
+        # OCR mock returns longer content to pass validation
+        expected = "# Test Document\n\nThis is a sample text with multiple words and diverse characters including symbols like !@#$% and numbers 12345."
+        assert all(r == expected for r in results)
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    @patch('utilities.workers.ocr_worker.get_rate_limit_config')
+    def test_ocr_worker_process_image_structured(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test processing a single image with structured result."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = OCRWorker(dump_dir=temp_dir, dump_ocr_response=True)
+        worker.start()
+
+        # Create a temporary image file with page number in filename
+        test_image = temp_dir / "test_pdf_0.jpg"
+        test_image.write_bytes(b"fake image data")
+
+        result = worker.process_image_structured(test_image, timeout=5.0)
+
+        # Check structured result
+        assert result.raw_text == "# Test Document\n\nThis is a sample text with multiple words and diverse characters including symbols like !@#$% and numbers 12345."
+        assert result.file_path == str(test_image)
+        assert result.page_number == 0
+        assert result.char_count > 0
+        assert result.token_estimate > 0
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    @patch('utilities.workers.ocr_worker.get_rate_limit_config')
+    def test_ocr_worker_process_images_structured(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test processing multiple images with structured results."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = OCRWorker(dump_dir=temp_dir, dump_ocr_response=True)
+        worker.start()
+
+        # Create temporary image files
+        images = []
+        for i in range(2):
+            img = temp_dir / f"test_pdf_{i}.jpg"
+            img.write_bytes(b"fake image data")
+            images.append(img)
+
+        results = worker.process_images_structured(images, timeout_per_image=5.0)
+
+        assert len(results) == 2
+        for i, result in enumerate(results):
+            assert result.page_number == i
+            assert result.char_count > 0
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    @patch('utilities.workers.ocr_worker.get_rate_limit_config')
+    def test_ocr_worker_stores_dumped_response(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test that OCR responses are dumped to JSON."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = OCRWorker(dump_dir=temp_dir, dump_ocr_response=True)
+        worker.start()
+
+        # Create a temporary image file
+        test_image = temp_dir / "test_image.jpg"
+        test_image.write_bytes(b"fake image data")
+
+        worker.process_image(test_image, timeout=5.0)
+
+        # Check that dump file was created
+        dump_files = list(temp_dir.glob("test_image.json"))
+        assert len(dump_files) >= 1
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    @patch('utilities.workers.ocr_worker.get_rate_limit_config')
+    def test_ocr_worker_nonexistent_file(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test handling of non-existent image file."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = OCRWorker(dump_dir=temp_dir, dump_ocr_response=True)
+        worker.start()
+
+        nonexistent = temp_dir / "nonexistent.jpg"
+
+        with pytest.raises(FileNotFoundError):
+            worker.process_image(nonexistent, timeout=5.0)
 
         worker.shutdown(wait=True, timeout=2.0)
 
@@ -289,5 +374,88 @@ class TestSummarizationWorker:
         test_text = "This is a test text for summarization."
         result = worker.summarize(test_text, timeout=5.0)
         assert result == "Test response"
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    @patch('utilities.workers.summarization_worker.get_rate_limit_config')
+    def test_summarization_worker_split_text_into_chunks(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test text splitting into chunks."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = SummarizationWorker(
+            text_source=TextSource.OCR,
+            dump_dir=temp_dir,
+            dump_summarization_response=True
+        )
+
+        # Create a long text
+        long_text = "This is paragraph one.\n\n" + "This is paragraph two.\n\n" * 100
+
+        chunks = worker._split_text_into_chunks(long_text, max_chars=1000)
+
+        assert len(chunks) > 1
+        # All chunks should be under max_chars
+        for chunk in chunks:
+            assert len(chunk) <= 1000 + 100  # Allow some tolerance for paragraph boundaries
+
+    @patch('utilities.workers.summarization_worker.get_rate_limit_config')
+    def test_summarization_worker_split_text_preserves_content(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test that text splitting preserves all content."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = SummarizationWorker(
+            text_source=TextSource.OCR,
+            dump_dir=temp_dir,
+            dump_summarization_response=True
+        )
+
+        # Text with known paragraph count
+        text = "Para1\n\nPara2\n\nPara3\n\nPara4\n\nPara5"
+        chunks = worker._split_text_into_chunks(text, max_chars=20)
+
+        # When combined, should have all content
+        combined = "\n\n".join(chunks)
+        assert "Para1" in combined
+        assert "Para5" in combined
+
+    @patch('utilities.workers.summarization_worker.get_rate_limit_config')
+    def test_summarization_worker_with_long_text_chunking(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test summarization with chunking enabled for long text."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = SummarizationWorker(
+            text_source=TextSource.OCR,
+            dump_dir=temp_dir,
+            dump_summarization_response=True
+        )
+        worker.start()
+
+        # Create a long text that would trigger chunking
+        long_text = "Paragraph content. " * 200  # ~2500 chars
+
+        # With chunking enabled
+        result = worker.summarize(long_text, timeout=10.0, use_chunking=True, max_chars=1000)
+        assert result == "Test response"  # Mock response
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    @patch('utilities.workers.summarization_worker.get_rate_limit_config')
+    def test_summarization_worker_stores_dumped_response(self, mock_rate_config, mock_env_vars, temp_dir, mock_openai_client):
+        """Test that summarization responses are dumped to JSON."""
+        mock_rate_config.return_value = (60, 100000)
+
+        worker = SummarizationWorker(
+            text_source=TextSource.OCR,
+            dump_dir=temp_dir,
+            dump_summarization_response=True
+        )
+        worker.start()
+
+        test_text = "Test text for dumping."
+        result = worker.summarize(test_text, timeout=5.0)
+
+        # Check that dump file was created
+        dump_files = list(temp_dir.glob("Summarization_*.json"))
+        assert len(dump_files) >= 1
 
         worker.shutdown(wait=True, timeout=2.0)

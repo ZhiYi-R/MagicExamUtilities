@@ -10,11 +10,14 @@ import time
 import json
 import pathlib
 import re
+import logging
 from enum import Enum
 from typing import Optional, List
 from openai import OpenAI
 
 from ..worker import BaseWorker, get_rate_limit_config, get_retry_config
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_outer_markdown_block(content: str) -> str:
@@ -286,6 +289,7 @@ class SummarizationWorker(BaseWorker):
 
         # Track usage and cost
         if not response.usage:
+            logger.warning(f'Summarization response did not include usage information, cost tracking disabled for this request')
             print(f'Summarization Done for text, length: {len(content)}')
         else:
             input_tokens = response.usage.prompt_tokens

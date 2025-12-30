@@ -6,6 +6,7 @@ from cached OCR results.
 """
 
 import os
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +16,8 @@ from openai import OpenAI
 
 from ..worker import BaseWorker, get_rate_limit_config, get_retry_config
 from ..retrieval.tools import get_all_tools
+
+logger = logging.getLogger(__name__)
 
 
 class AskAIWorker(BaseWorker):
@@ -94,6 +97,7 @@ class AskAIWorker(BaseWorker):
         # LangChain may store usage in different places depending on version
         input_tokens = 0
         output_tokens = 0
+        found_usage = False
 
         # Try usage_metadata first (newer LangChain versions)
         if hasattr(response, 'usage_metadata'):
@@ -101,6 +105,7 @@ class AskAIWorker(BaseWorker):
             if usage:
                 input_tokens = usage.get('input_tokens', 0)
                 output_tokens = usage.get('output_tokens', 0)
+                found_usage = True
 
         # Try response_metadata as fallback
         elif hasattr(response, 'response_metadata'):
@@ -109,12 +114,15 @@ class AskAIWorker(BaseWorker):
                 token_usage = metadata['token_usage']
                 input_tokens = token_usage.get('prompt_tokens', 0)
                 output_tokens = token_usage.get('completion_tokens', 0)
+                found_usage = True
 
         # Track usage if tokens were found
         if input_tokens > 0 or output_tokens > 0:
             cost = self._track_usage(input_tokens, output_tokens)
             cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
             print(f'[AskAIWorker] {call_type} call - usage: {input_tokens} in + {output_tokens} out, cost: {cost_str}')
+        elif not found_usage:
+            logger.warning(f'[AskAIWorker] {call_type} call - LangChain response did not include usage information, cost tracking disabled for this request')
 
     def _ask(self, question: str, kb_id: Optional[str] = None, timeout: Optional[float] = None) -> str:
         """
@@ -221,6 +229,8 @@ class AskAIWorker(BaseWorker):
                     cost = self._track_usage(input_tokens, output_tokens)
                     cost_str = self._cost_tracker.format_cost(cost) if cost > 0 else "N/A"
                     print(f'[AskAIWorker] Fallback API call - usage: {input_tokens} in + {output_tokens} out, cost: {cost_str}')
+                else:
+                    logger.warning('[AskAIWorker] Fallback API call did not include usage information, cost tracking disabled for this request')
 
             except Exception as e2:
                 print(f'[AskAIWorker] Direct API call also failed: {e2}')

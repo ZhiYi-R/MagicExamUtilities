@@ -267,6 +267,29 @@ This project is open source under [GPL v3.0](https://www.gnu.org/licenses/gpl-3.
 
 See [Changelog](#changelog) section below.
 
+### [0.7.3] - 2024-12-30
+
+**Added: Automatic Retry Mechanism**
+- BaseWorker now includes intelligent retry functionality for failed API requests
+- Configurable maximum retry attempts and retry delay (via environment variables)
+- Smart exception classification: automatically identifies retryable errors (timeout, network errors, 429/503/502) and non-retryable errors (ValueError, TypeError, etc.)
+- Retry statistics tracking: records total retry count and failure count
+- Retry statistics displayed on worker shutdown
+
+**Updated: Environment Variable Configuration**
+- .env.example added "Retry Configuration" section
+- Independent retry configuration support for each service (OCR/ASR/SUMMARIZATION/ASK_AI)
+- Default configuration: OCR 2 retries, other services 0 retries
+
+**Improved: API Usage Handling**
+- Logs warning instead of crashing when API doesn't return token usage information
+- Cost tracking automatically sets to 0 when usage info is missing
+
+**Tests:**
+- Added retry mechanism unit tests (6 new tests)
+- Added retrieval module tests (29 new tests)
+- Overall test coverage improved from 43% to 66% (158 tests)
+
 ### [0.7.2] - 2024-12-30
 
 **Added: Model Cost Tracking Feature**

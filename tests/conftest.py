@@ -58,18 +58,34 @@ def mock_openai_client():
     with patch('utilities.workers.ocr_worker.OpenAI') as mock_ocr, \
          patch('utilities.workers.summarization_worker.OpenAI') as mock_sum:
 
-        # Configure mock responses
-        for mock_client in [mock_ocr.return_value, mock_sum.return_value]:
-            mock_response = Mock()
-            mock_choice = Mock()
-            mock_message = Mock()
-            mock_message.content = "Test response"
-            mock_choice.message = mock_message
-            mock_response.choices = [mock_choice]
-            mock_response.usage = Mock()
-            mock_response.usage.total_tokens = 100
-            mock_response.model_dump_json.return_value = '{"test": "data"}'
-            mock_client.chat.completions.create.return_value = mock_response
+        # OCR mock response - needs to be long enough to pass validation
+        ocr_response = Mock()
+        ocr_choice = Mock()
+        ocr_message = Mock()
+        # Use a longer response with diverse characters to pass OCR validation
+        ocr_message.content = "# Test Document\n\nThis is a sample text with multiple words and diverse characters including symbols like !@#$% and numbers 12345."
+        ocr_choice.message = ocr_message
+        ocr_response.choices = [ocr_choice]
+        ocr_response.usage = Mock()
+        ocr_response.usage.total_tokens = 200
+        ocr_response.usage.prompt_tokens = 100
+        ocr_response.usage.completion_tokens = 100
+        ocr_response.model_dump_json.return_value = '{"test": "ocr"}'
+        mock_ocr.return_value.chat.completions.create.return_value = ocr_response
+
+        # Summarization mock response
+        sum_response = Mock()
+        sum_choice = Mock()
+        sum_message = Mock()
+        sum_message.content = "Test response"
+        sum_choice.message = sum_message
+        sum_response.choices = [sum_choice]
+        sum_response.usage = Mock()
+        sum_response.usage.total_tokens = 100
+        sum_response.usage.prompt_tokens = 50
+        sum_response.usage.completion_tokens = 50
+        sum_response.model_dump_json.return_value = '{"test": "summarization"}'
+        mock_sum.return_value.chat.completions.create.return_value = sum_response
 
         yield {
             'ocr': mock_ocr,

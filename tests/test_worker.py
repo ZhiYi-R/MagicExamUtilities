@@ -542,3 +542,229 @@ class TestBaseWorkerCostTracking:
         assert "Cost summary" in captured.out
         assert "requests: 1" in captured.out
         assert "input_tokens: 1,000" in captured.out
+
+
+@pytest.mark.unit
+class TestBaseWorkerRetry:
+    """Test cases for BaseWorker retry mechanism."""
+
+    def test_should_retry_with_non_retryable_exceptions(self, temp_dir):
+        """Test that non-retryable exceptions are not retried."""
+        class TestWorker(BaseWorker):
+            def _register_methods(self):
+                self._methods = {}
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._register_methods()
+
+        worker = TestWorker(name="TestWorker", max_retries=3)
+
+        # Test each non-retryable exception type
+        non_retryable_exceptions = [
+            ValueError("test value error"),
+            TypeError("test type error"),
+            AttributeError("test attribute error"),
+            KeyError("test_key"),
+            ImportError("test_module"),
+            NotImplementedError("test not implemented"),
+        ]
+
+        for exc in non_retryable_exceptions:
+            assert worker._should_retry(exc) is False, f"Should not retry {type(exc).__name__}"
+
+    def test_should_retry_with_retryable_patterns(self, temp_dir):
+        """Test that exceptions with retryable patterns are retried."""
+        class TestWorker(BaseWorker):
+            def _register_methods(self):
+                self._methods = {}
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._register_methods()
+
+        worker = TestWorker(name="TestWorker", max_retries=3)
+
+        # Test retryable exception patterns
+        retryable_exceptions = [
+            RuntimeError("Connection timeout"),
+            RuntimeError("Network error"),
+            RuntimeError("Temporary failure"),
+            RuntimeError("Service unavailable"),
+            RuntimeError("Rate limit exceeded"),
+            RuntimeError("HTTP 429"),
+            RuntimeError("HTTP 503"),
+            RuntimeError("HTTP 502"),
+            # Generic runtime error should also be retryable (default behavior)
+            RuntimeError("Generic error"),
+        ]
+
+        for exc in retryable_exceptions:
+            assert worker._should_retry(exc) is True, f"Should retry {exc}"
+
+    def test_retry_on_temporary_failure(self, temp_dir):
+        """Test that worker retries on temporary failures."""
+        class TestWorker(BaseWorker):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.attempt_count = 0
+                self._register_methods()
+
+            def _register_methods(self):
+                self._methods = {
+                    'failing_task': self._failing_task
+                }
+
+            def _failing_task(self):
+                self.attempt_count += 1
+                if self.attempt_count < 3:
+                    raise RuntimeError("Connection timeout")
+                return "success"
+
+        worker = TestWorker(name="TestWorker", max_retries=3, retry_delay=0.05, poll_interval=0.01)
+        worker.start()
+
+        future = worker.submit('failing_task')
+        result = future.get(timeout=5.0)
+
+        assert result == "success"
+        assert worker.attempt_count == 3  # Initial attempt + 2 retries
+        assert worker._total_retries == 2
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    def test_no_retry_on_non_retryable_exception(self, temp_dir):
+        """Test that non-retryable exceptions fail immediately."""
+        class TestWorker(BaseWorker):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.attempt_count = 0
+                self._register_methods()
+
+            def _register_methods(self):
+                self._methods = {
+                    'invalid_task': self._invalid_task
+                }
+
+            def _invalid_task(self):
+                self.attempt_count += 1
+                raise ValueError("Invalid parameter")
+
+        worker = TestWorker(name="TestWorker", max_retries=3, retry_delay=0.05, poll_interval=0.01)
+        worker.start()
+
+        future = worker.submit('invalid_task')
+
+        with pytest.raises(ValueError, match="Invalid parameter"):
+            future.get(timeout=2.0)
+
+        # Should have failed immediately without retries
+        assert worker.attempt_count == 1
+        assert worker._total_retries == 0
+        assert worker._total_failures == 1
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    def test_retry_exhaustion(self, temp_dir):
+        """Test that task fails after max retries is exhausted."""
+        class TestWorker(BaseWorker):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.attempt_count = 0
+                self._register_methods()
+
+            def _register_methods(self):
+                self._methods = {
+                    'always_failing': self._always_failing
+                }
+
+            def _always_failing(self):
+                self.attempt_count += 1
+                raise RuntimeError("Connection timeout")
+
+        worker = TestWorker(name="TestWorker", max_retries=2, retry_delay=0.05, poll_interval=0.01)
+        worker.start()
+
+        future = worker.submit('always_failing')
+
+        with pytest.raises(RuntimeError, match="Connection timeout"):
+            future.get(timeout=5.0)
+
+        # Should have attempted max_retries + 1 times
+        assert worker.attempt_count == 3  # Initial + 2 retries
+        assert worker._total_retries == 2
+        assert worker._total_failures == 1
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    def test_retry_statistics_tracking(self, temp_dir):
+        """Test that retry statistics are properly tracked."""
+        class TestWorker(BaseWorker):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.call_count = 0
+                self._register_methods()
+
+            def _register_methods(self):
+                self._methods = {
+                    'task1': self._task1,
+                    'task2': self._task2,
+                }
+
+            def _task1(self):
+                self.call_count += 1
+                if self.call_count <= 2:
+                    raise RuntimeError("Timeout")
+                return "task1_success"
+
+            def _task2(self):
+                raise ValueError("Invalid")
+
+        worker = TestWorker(name="TestWorker", max_retries=3, retry_delay=0.05, poll_interval=0.01)
+        worker.start()
+
+        # task1 should succeed after retries
+        future1 = worker.submit('task1')
+        assert future1.get(timeout=5.0) == "task1_success"
+
+        # task2 should fail immediately (non-retryable)
+        future2 = worker.submit('task2')
+        with pytest.raises(ValueError):
+            future2.get(timeout=2.0)
+
+        # Check statistics
+        assert worker._total_retries == 2  # From task1 retries
+        assert worker._total_failures == 1  # From task2
+
+        worker.shutdown(wait=True, timeout=2.0)
+
+    def test_no_retry_when_max_retries_is_zero(self, temp_dir):
+        """Test that no retries occur when max_retries is 0."""
+        class TestWorker(BaseWorker):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.attempt_count = 0
+                self._register_methods()
+
+            def _register_methods(self):
+                self._methods = {
+                    'failing_task': self._failing_task
+                }
+
+            def _failing_task(self):
+                self.attempt_count += 1
+                raise RuntimeError("Temporary error")
+
+        worker = TestWorker(name="TestWorker", max_retries=0, poll_interval=0.01)
+        worker.start()
+
+        future = worker.submit('failing_task')
+
+        with pytest.raises(RuntimeError, match="Temporary error"):
+            future.get(timeout=2.0)
+
+        # Should have failed immediately without retries
+        assert worker.attempt_count == 1
+        assert worker._total_retries == 0
+
+        worker.shutdown(wait=True, timeout=2.0)

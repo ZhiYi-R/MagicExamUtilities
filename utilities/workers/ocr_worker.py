@@ -9,11 +9,14 @@ import hashlib
 import pathlib
 import re
 import time
+import logging
 from typing import Optional, Tuple
 from openai import OpenAI
 
 from ..worker import BaseWorker, get_rate_limit_config, get_retry_config
 from ..models import OCRResult, compute_file_hash, estimate_tokens
+
+logger = logging.getLogger(__name__)
 
 
 def _strip_outer_markdown_block(content: str) -> str:
@@ -331,6 +334,7 @@ class OCRWorker(BaseWorker):
             print(f'OCR Done for image: {image_path}, length: {len(content)}, '
                   f'usage: {input_tokens} in + {output_tokens} out = {token_count} total, cost: {cost_str}')
         else:
+            logger.warning(f'OCR response for {image_path} did not include usage information, cost tracking disabled for this request')
             print(f'OCR Done for image: {image_path}, length: {len(content)}')
 
         # Create structured result
