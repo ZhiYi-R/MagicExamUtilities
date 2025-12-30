@@ -8,7 +8,8 @@ import base64
 import hashlib
 import pathlib
 import re
-from typing import Optional
+import time
+from typing import Optional, Tuple
 from openai import OpenAI
 
 from ..worker import BaseWorker, get_rate_limit_config
@@ -54,6 +55,118 @@ def _strip_outer_markdown_block(content: str) -> str:
     return content
 
 
+def _detect_and_fix_duplicates(content: str) -> Tuple[str, bool]:
+    """
+    Detect and fix duplicate content in OCR output.
+
+    Common duplicate patterns:
+    1. Consecutive repeated paragraphs
+    2. Entire content repeated at the end
+    3. Repeated lines or sections
+
+    Args:
+        content: The OCR output content
+
+    Returns:
+        Tuple of (cleaned_content, had_duplicates)
+    """
+    had_duplicates = False
+    original = content
+
+    # Split into paragraphs
+    paragraphs = content.split('\n\n')
+    cleaned_paragraphs = []
+    i = 0
+
+    while i < len(paragraphs):
+        para = paragraphs[i].strip()
+        if not para:
+            i += 1
+            continue
+
+        # Check if current paragraph is a duplicate of the next one
+        if i + 1 < len(paragraphs):
+            next_para = paragraphs[i + 1].strip()
+            if para == next_para:
+                had_duplicates = True
+                print(f"[OCR] Found duplicate paragraph, skipping: {para[:50]}...")
+                i += 2  # Skip both duplicates
+                continue
+
+        # Check for multiple consecutive repeated paragraphs (3+ times)
+        repeat_count = 1
+        if i + 1 < len(paragraphs):
+            next_para = paragraphs[i + 1].strip()
+            if para == next_para:
+                # Count how many times it repeats
+                j = i + 1
+                while j < len(paragraphs) and paragraphs[j].strip() == para:
+                    repeat_count += 1
+                    j += 1
+
+                if repeat_count >= 3:
+                    had_duplicates = True
+                    print(f"[OCR] Found {repeat_count}x repeated paragraph, keeping one")
+                    i = j  # Skip all but first
+                    cleaned_paragraphs.append(para)
+                    continue
+
+        cleaned_paragraphs.append(para)
+        i += 1
+
+    content = '\n\n'.join(cleaned_paragraphs)
+
+    # Check for entire content being repeated at the end
+    lines = content.split('\n')
+    # Try different suffix lengths to find repeats
+    for suffix_len in [min(20, len(lines) // 3), min(10, len(lines) // 4), min(5, len(lines) // 5)]:
+        if suffix_len < 2:
+            continue
+        if len(lines) < suffix_len * 2:
+            continue
+
+        first_part = '\n'.join(lines[:len(lines) - suffix_len])
+        suffix = '\n'.join(lines[-suffix_len:])
+
+        # Check if the suffix appears somewhere in the first part
+        if suffix in first_part:
+            had_duplicates = True
+            print(f"[OCR] Found {suffix_len}-line suffix repeated in content, removing suffix")
+            content = first_part
+            break
+
+    return content, had_duplicates
+
+
+def _validate_ocr_output(content: str) -> Tuple[bool, str]:
+    """
+    Validate OCR output for common issues.
+
+    Args:
+        content: The OCR output content
+
+    Returns:
+        Tuple of (is_valid, issue_description)
+    """
+    if not content or content.strip() == '':
+        return False, "Empty output"
+
+    if len(content.strip()) < 10:
+        return False, f"Output too short ({len(content.strip())} chars)"
+
+    # Check for excessive repetition (same character repeated > 50 times)
+    for char in ['\n', ' ', '.', '-']:
+        if char * 50 in content:
+            return False, f"Excessive repetition of '{char}'"
+
+    # Check for very low content diversity (less than 10 unique characters)
+    unique_chars = set(content)
+    if len(unique_chars) < 10:
+        return False, f"Low character diversity ({len(unique_chars)} unique chars)"
+
+    return True, ""
+
+
 class OCRWorker(BaseWorker):
     """
     Worker for OCR processing.
@@ -64,19 +177,22 @@ class OCRWorker(BaseWorker):
 
     def __init__(self,
                  dump_dir: pathlib.Path = pathlib.Path('.'),
-                 dump_ocr_response: bool = True):
+                 dump_ocr_response: bool = True,
+                 max_retries: int = 2):
         """
         Initialize the OCR worker.
 
         Args:
             dump_dir: Directory to dump OCR responses
             dump_ocr_response: Whether to dump OCR responses to JSON
+            max_retries: Maximum number of retries for failed OCR attempts
         """
         rpm, tpm = get_rate_limit_config('OCR')
         super().__init__(name='OCRWorker', rpm=rpm, tpm=tpm)
 
         self._dump_dir = dump_dir
         self._dump_ocr_response = dump_ocr_response
+        self._max_retries = max_retries
 
         # Use OCR-specific config if available, otherwise fall back to legacy config
         api_url = os.environ.get('OCR_API_URL', os.environ.get('OPENAI_LIKE_API_URL'))
@@ -159,7 +275,7 @@ class OCRWorker(BaseWorker):
         return result.raw_text
 
     def _ocr_structured(self, image_path: pathlib.Path) -> OCRResult:
-        """Process an image with OCR and return structured result."""
+        """Process an image with OCR and return structured result with retry logic."""
         if not image_path.exists():
             raise FileNotFoundError(f'Image {image_path} does not exist')
 
@@ -177,45 +293,74 @@ class OCRWorker(BaseWorker):
         with open(image_path, 'rb') as f:
             image_base64 = base64.b64encode(f.read()).decode('utf-8')
 
-            if self._use_deepseek:
-                response = self._deepseek_ocr(image_base64, image_path)
-            else:
-                response = self._generic_ocr(image_base64, image_path)
+        # Retry logic for OCR
+        for attempt in range(self._max_retries + 1):
+            try:
+                if self._use_deepseek:
+                    response = self._deepseek_ocr(image_base64, image_path)
+                else:
+                    response = self._generic_ocr(image_base64, image_path)
 
-        if not response.choices:
-            raise RuntimeError(f'No choices returned from API for image {image_path}')
-        if not response.choices[0].message.content:
-            raise RuntimeError(f'No content returned from API for image {image_path}')
+                if not response.choices:
+                    raise RuntimeError(f'No choices returned from API for image {image_path}')
+                if not response.choices[0].message.content:
+                    raise RuntimeError(f'No content returned from API for image {image_path}')
 
-        content = response.choices[0].message.content
-        # Strip outer markdown code block wrapper (Qwen models add this)
-        content = _strip_outer_markdown_block(content)
-        token_count = response.usage.total_tokens if response.usage else estimate_tokens(len(content))
+                content = response.choices[0].message.content
+                # Strip outer markdown code block wrapper (Qwen models add this)
+                content = _strip_outer_markdown_block(content)
 
-        if not response.usage:
-            print(f'OCR Done for image: {image_path}, length: {len(content)}')
-        else:
-            print(f'OCR Done for image: {image_path}, length: {len(content)}, usage: {token_count}')
+                # Validate output
+                is_valid, issue = _validate_ocr_output(content)
+                if not is_valid:
+                    if attempt < self._max_retries:
+                        print(f'[OCR] Attempt {attempt + 1}/{self._max_retries + 1} failed: {issue}, retrying...')
+                        time.sleep(0.5)  # Brief delay before retry
+                        continue
+                    else:
+                        print(f'[OCR] All {self._max_retries + 1} attempts failed, using last result despite: {issue}')
+                        # Continue with the last result even if validation failed
 
-        # Create structured result
-        result = OCRResult(
-            file_path=str(image_path),
-            file_hash=file_hash,
-            page_number=page_number,
-            timestamp=os.path.getmtime(image_path),
-            raw_text=content,
-            sections=[],  # Could be enhanced with text parsing
-            char_count=len(content),
-            token_estimate=token_count
-        )
+                # Detect and fix duplicates
+                content, had_duplicates = _detect_and_fix_duplicates(content)
+                if had_duplicates:
+                    print(f'[OCR] Duplicates detected and removed in output')
 
-        if self._dump_ocr_response:
-            dump_file_path = self._dump_dir.joinpath(f'{image_path.stem}.json')
-            with open(dump_file_path, 'w') as f:
-                f.write(response.model_dump_json(indent=4, ensure_ascii=False))
-            print(f'Dumped OCR response to {dump_file_path}')
+                token_count = response.usage.total_tokens if response.usage else estimate_tokens(len(content))
 
-        return result
+                if not response.usage:
+                    print(f'OCR Done for image: {image_path}, length: {len(content)}')
+                else:
+                    print(f'OCR Done for image: {image_path}, length: {len(content)}, usage: {token_count}')
+
+                # Create structured result
+                result = OCRResult(
+                    file_path=str(image_path),
+                    file_hash=file_hash,
+                    page_number=page_number,
+                    timestamp=os.path.getmtime(image_path),
+                    raw_text=content,
+                    sections=[],
+                    char_count=len(content),
+                    token_estimate=token_count
+                )
+
+                if self._dump_ocr_response:
+                    dump_file_path = self._dump_dir.joinpath(f'{image_path.stem}.json')
+                    with open(dump_file_path, 'w') as f:
+                        f.write(response.model_dump_json(indent=4, ensure_ascii=False))
+                    print(f'Dumped OCR response to {dump_file_path}')
+
+                return result
+
+            except Exception as e:
+                if attempt < self._max_retries:
+                    print(f'[OCR] Attempt {attempt + 1}/{self._max_retries + 1} failed with error: {e}, retrying...')
+                    time.sleep(0.5)
+                    continue
+                else:
+                    print(f'[OCR] All {self._max_retries + 1} attempts failed, raising error')
+                    raise
 
     def _deepseek_ocr(self, image_base64: str, image_path: pathlib.Path):
         """DeepSeek OCR implementation."""
