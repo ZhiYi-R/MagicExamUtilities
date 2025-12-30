@@ -18,6 +18,7 @@ wheels/
 
 # AI assistant documentation
 CLAUDE.md
+plan.md
 
 # Miscellaneous
 .DS_Store
