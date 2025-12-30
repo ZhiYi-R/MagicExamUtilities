@@ -53,7 +53,7 @@ class STTWorker(BaseWorker):
         """Get the model name used by this worker."""
         return self._model
 
-    def _stt(self, audio_path: pathlib.Path) -> str:
+    def _stt(self, audio_path: pathlib.Path, _timeout: Optional[float] = None) -> str:
         """Process an audio file with STT."""
         if not audio_path.exists():
             raise FileNotFoundError(f'Audio {audio_path} does not exist')
@@ -69,7 +69,8 @@ class STTWorker(BaseWorker):
                 files={
                     'file': (audio_path.name, f.read(), 'audio/mpeg'),
                     'model': (None, self._model)
-                }
+                },
+                timeout=_timeout
             )
 
         if response.status_code != 200:

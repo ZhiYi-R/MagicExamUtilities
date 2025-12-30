@@ -391,6 +391,10 @@ class BaseWorker(threading.Thread):
         """
         Execute a method with timeout.
 
+        Note: The timeout is passed to the method via _timeout kwarg.
+        Individual methods are responsible for enforcing the timeout
+        (e.g., by passing it to underlying API calls).
+
         Args:
             method: The method to execute
             args: Positional arguments
@@ -401,17 +405,12 @@ class BaseWorker(threading.Thread):
             The result of the method call
 
         Raises:
-            WorkerTimeoutError: If the method times out
+            Exception: Any exception raised by the method (including WorkerTimeoutError)
         """
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(method, *args, **kwargs)
-            try:
-                return future.result(timeout=timeout)
-            except concurrent.futures.TimeoutError:
-                future.cancel()
-                raise WorkerTimeoutError(
-                    f"Task {method.__name__} timed out after {timeout} seconds"
-                )
+        # Pass timeout to the method via kwargs
+        # The method is responsible for enforcing the timeout
+        kwargs_with_timeout = {**kwargs, '_timeout': timeout}
+        return method(*args, **kwargs_with_timeout)
 
     def run(self) -> None:
         """Main worker loop."""

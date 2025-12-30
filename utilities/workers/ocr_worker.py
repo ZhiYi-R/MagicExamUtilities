@@ -279,12 +279,12 @@ class OCRWorker(BaseWorker):
         """Get the model name used by this worker."""
         return self._model
 
-    def _ocr(self, image_path: pathlib.Path) -> str:
+    def _ocr(self, image_path: pathlib.Path, _timeout: Optional[float] = None) -> str:
         """Process an image with OCR (legacy, returns plain text)."""
-        result = self._ocr_structured(image_path)
+        result = self._ocr_structured(image_path, _timeout=_timeout)
         return result.raw_text
 
-    def _ocr_structured(self, image_path: pathlib.Path) -> OCRResult:
+    def _ocr_structured(self, image_path: pathlib.Path, _timeout: Optional[float] = None) -> OCRResult:
         """Process an image with OCR and return structured result with retry logic."""
         if not image_path.exists():
             raise FileNotFoundError(f'Image {image_path} does not exist')
@@ -305,9 +305,9 @@ class OCRWorker(BaseWorker):
 
         # Perform OCR (retry is handled by Worker level)
         if self._use_deepseek:
-            response = self._deepseek_ocr(image_base64, image_path)
+            response = self._deepseek_ocr(image_base64, image_path, _timeout=_timeout)
         else:
-            response = self._generic_ocr(image_base64, image_path)
+            response = self._generic_ocr(image_base64, image_path, _timeout=_timeout)
 
         if not response.choices:
             raise RuntimeError(f'No choices returned from API for image {image_path}')
@@ -365,7 +365,7 @@ class OCRWorker(BaseWorker):
 
         return result
 
-    def _deepseek_ocr(self, image_base64: str, image_path: pathlib.Path):
+    def _deepseek_ocr(self, image_base64: str, image_path: pathlib.Path, _timeout: Optional[float] = None):
         """DeepSeek OCR implementation."""
         return self._client.chat.completions.create(
             model=self._model,
@@ -389,10 +389,11 @@ class OCRWorker(BaseWorker):
             presence_penalty=0.0,
             extra_body={
                 'repetition_penalty': 1.0,
-            }
+            },
+            timeout=_timeout
         )
 
-    def _generic_ocr(self, image_base64: str, image_path: pathlib.Path):
+    def _generic_ocr(self, image_base64: str, image_path: pathlib.Path, _timeout: Optional[float] = None):
         """Generic Vision-Language OCR implementation."""
         return self._client.chat.completions.create(
             model=self._model,
@@ -419,7 +420,8 @@ class OCRWorker(BaseWorker):
             presence_penalty=0.0,
             extra_body={
                 'repetition_penalty': 1.0,
-            }
+            },
+            timeout=_timeout
         )
 
     def _estimate_tokens(self, task) -> int:

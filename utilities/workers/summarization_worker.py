@@ -285,7 +285,7 @@ class SummarizationWorker(BaseWorker):
         """Get the model name used by this worker."""
         return self._model
 
-    def _summarize(self, text: str) -> str:
+    def _summarize(self, text: str, _timeout: Optional[float] = None) -> str:
         """Summarize the given text."""
         print(f'Summarizing text of length {len(text)}')
 
@@ -319,6 +319,7 @@ class SummarizationWorker(BaseWorker):
             ],
             temperature=0.1,
             top_p=1.0,
+            timeout=_timeout
         )
 
         if not response.choices:
@@ -410,7 +411,8 @@ class SummarizationWorker(BaseWorker):
         self,
         text: str,
         max_chars_per_chunk: int = 8000,
-        progress_callback=None
+        progress_callback=None,
+        _timeout: Optional[float] = None
     ) -> str:
         """
         Summarize long text by splitting into chunks.
@@ -419,6 +421,7 @@ class SummarizationWorker(BaseWorker):
             text: Long text to summarize
             max_chars_per_chunk: Maximum characters per chunk
             progress_callback: Optional callback for progress updates
+            _timeout: Optional timeout for API calls
 
         Returns:
             Combined summary
@@ -434,7 +437,7 @@ class SummarizationWorker(BaseWorker):
                 progress_callback(i, len(chunks), f"Summarizing chunk {i+1}/{len(chunks)}")
 
             print(f"[SummarizationWorker] Summarizing chunk {i+1}/{len(chunks)} (length: {len(chunk)})")
-            summary = self._summarize(chunk)
+            summary = self._summarize(chunk, _timeout=_timeout)
             chunk_summaries.append(summary)
 
         # Combine summaries
@@ -446,7 +449,7 @@ class SummarizationWorker(BaseWorker):
             if progress_callback:
                 progress_callback(len(chunks), len(chunks), "Creating final summary...")
             print("[SummarizationWorker] Combined summary still long, creating final summary...")
-            return self._summarize(combined_text)
+            return self._summarize(combined_text, _timeout=_timeout)
 
         return combined_text
 
@@ -481,7 +484,7 @@ class SummarizationWorker(BaseWorker):
             future = self.submit('summarize', text, _task_timeout=timeout)
             return future.get()
 
-    def _correct_transcript(self, text: str) -> str:
+    def _correct_transcript(self, text: str, _timeout: Optional[float] = None) -> str:
         """
         Correct the given transcript text.
 
@@ -513,6 +516,7 @@ class SummarizationWorker(BaseWorker):
             ],
             temperature=0.1,
             top_p=1.0,
+            timeout=_timeout
         )
 
         if not response.choices:
@@ -572,7 +576,7 @@ class SummarizationWorker(BaseWorker):
         future = self.submit('correct_transcript', text, _task_timeout=timeout)
         return future.get()
 
-    def _generate_title(self, content: str) -> str:
+    def _generate_title(self, content: str, _timeout: Optional[float] = None) -> str:
         """
         Generate a title for the given content using AI.
 
@@ -635,6 +639,7 @@ class SummarizationWorker(BaseWorker):
             temperature=0.3,
             top_p=1.0,
             max_tokens=100,
+            timeout=_timeout
         )
 
         if not response.choices:
