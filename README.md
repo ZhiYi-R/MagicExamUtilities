@@ -67,6 +67,21 @@ python main.py --type [audio|pdf] --input [input_files] --output [output_dir]
 
 ## Changelog
 
+### [0.4.0] - 2024-12-30
+
+**重构：精简架构，PDF 处理合并到 main.py**
+- 将 DumpPDF 的 PDF 转图片逻辑合并到 main.py
+- 删除 `utilities/DumpPDF.py`，所有 PDF 处理逻辑集中在 main.py 的 `convert_pdf_to_images` 函数
+- 代码覆盖率提升至 94%
+
+**架构简化：**
+- `main.py`: 新增 `convert_pdf_to_images` 函数，处理 PDF 到图片的转换
+- 删除：`utilities/DumpPDF.py`
+
+**测试：**
+- 所有 60 个单元测试通过
+- 代码覆盖率：91% → 94%
+
 ### [0.3.0] - 2024-12-30
 
 **重构：精简架构，所有逻辑合并到 Worker**

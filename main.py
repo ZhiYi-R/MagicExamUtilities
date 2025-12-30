@@ -12,8 +12,8 @@ import argparse
 import atexit
 from pathlib import Path
 from dotenv import load_dotenv
+from pdf2image import convert_from_path
 
-from utilities.DumpPDF import dump_pdf
 from utilities.workers import OCRWorker, STTWorker, SummarizationWorker, TextSource
 
 
@@ -76,6 +76,37 @@ def validate_files(file_paths: list[str], file_type: str) -> list[Path]:
     return valid_files
 
 
+def convert_pdf_to_images(pdf_path: Path, dump_dir: Path) -> list[Path]:
+    """
+    Convert a PDF file to images.
+
+    Args:
+        pdf_path: Path to the PDF file
+        dump_dir: Directory to save the images
+
+    Returns:
+        List of paths to the generated images
+    """
+    print(f'[Main] Converting PDF to images: {pdf_path}')
+    dump_dir.mkdir(parents=True, exist_ok=True)
+
+    images = convert_from_path(
+        pdf_path=pdf_path,
+        dpi=300,
+        fmt='jpeg',
+        grayscale=False
+    )
+
+    image_paths = []
+    for i, image in enumerate(images):
+        image_path = dump_dir.joinpath(f'{pdf_path.stem}_{i}.jpg')
+        image.save(image_path, 'JPEG')
+        print(f'[Main] Dumped image: {image_path}')
+        image_paths.append(image_path)
+
+    return image_paths
+
+
 def process_pdf_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_dir: Path) -> None:
     """
     Process PDF files through the OCR + Summarization pipeline.
@@ -94,8 +125,7 @@ def process_pdf_pipeline(files: list[Path], dump_dir: Path, dump: bool, output_d
     image_paths = []
     for pdf_path in files:
         dump_path = dump_dir.joinpath(pdf_path.stem)
-        dump_path.mkdir(parents=True, exist_ok=True)
-        image_paths.extend(dump_pdf(pdf_path, dump_path))
+        image_paths.extend(convert_pdf_to_images(pdf_path, dump_path))
     print(f'[Main] Converted {len(files)} PDF(s) to {len(image_paths)} image(s)')
 
     # Step 2: Initialize and start OCR worker
