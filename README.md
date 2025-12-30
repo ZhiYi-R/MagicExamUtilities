@@ -230,6 +230,25 @@ python main.py --type pdf --input file.pdf --output ./notes --dump-dir ./cache
 
 详见 [Changelog](#changelog) 章节。
 
+### [0.7.1] - 2024-12-30
+
+**修复：Qwen 模型 Markdown 代码块包装问题**
+- 修复 Qwen 系列模型自动添加外层 ```markdown 代码块的问题
+- 新增 `_strip_outer_markdown_block()` 函数自动检测并移除
+- 保留文档内合法的代码块不受影响
+
+**修复：VLM OCR 编造图片 URL 问题**
+- 修复 VLM 在处理包含图片的文档时编造假 URL 的问题
+- 更新 OCR 提示词，明确禁止编造任何 URL 或文件路径
+- 新增图片处理规则，指导模型用文字描述图片内容
+
+**优化：OCR 和总结提示词重构**
+- 重写 Generic VLM OCR 提示词，结构更清晰
+- 重写 OCR 总结提示词（PDF 专用），强调结构化组织
+- 重写 STT 总结提示词（音频专用），强调去除口语冗余
+- 添加详细的特殊内容处理表格
+- 优化用户提示词，更简洁明确
+
 ### [0.7.0] - 2024-12-30
 
 **新增：知识库管理系统**

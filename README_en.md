@@ -231,6 +231,25 @@ This project is open source under [GPL v3.0](https://www.gnu.org/licenses/gpl-3.
 
 See [Changelog](#changelog) section below.
 
+### [0.7.1] - 2024-12-30
+
+**Fixed: Qwen Model Markdown Code Block Wrapper Issue**
+- Fixed issue where Qwen series models automatically wrap output in ```markdown code blocks
+- Added `_strip_outer_markdown_block()` function to automatically detect and remove wrapper
+- Preserves legitimate code blocks within documents
+
+**Fixed: VLM OCR Hallucinating Image URLs**
+- Fixed issue where VLM generates fake URLs when processing documents containing images
+- Updated OCR prompts to explicitly prohibit generating any URLs or file paths
+- Added image processing rules to guide models to describe images in text
+
+**Improved: OCR and Summarization Prompt Refactoring**
+- Rewrote Generic VLM OCR prompt with clearer structure
+- Rewrote OCR summarization prompt (PDF-specific) emphasizing structured organization
+- Rewrote STT summarization prompt (audio-specific) emphasizing removing speech redundancies
+- Added detailed special content handling table
+- Optimized user prompts for conciseness and clarity
+
 ### [0.7.0] - 2024-12-30
 
 **Added: Knowledge Base Management System**
