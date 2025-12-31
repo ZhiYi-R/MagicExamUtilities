@@ -441,7 +441,7 @@ class OCRWorker(BaseWorker):
             OCR result as text
         """
         future = self.submit('ocr', image_path, _task_timeout=timeout)
-        return future.get()
+        return future.get(timeout=timeout)
 
     def process_image_structured(self, image_path: pathlib.Path, timeout: Optional[float] = None) -> OCRResult:
         """
@@ -455,7 +455,7 @@ class OCRWorker(BaseWorker):
             Structured OCR result
         """
         future = self.submit('ocr_structured', image_path, _task_timeout=timeout)
-        return future.get()
+        return future.get(timeout=timeout)
 
     def process_images(self, image_paths: list[pathlib.Path], timeout_per_image: Optional[float] = None) -> list[str]:
         """

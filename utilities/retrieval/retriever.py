@@ -128,16 +128,22 @@ class SemanticSearcher:
         path.mkdir(parents=True, exist_ok=True)
 
         # Save FAISS index
+        print(f"[SemanticSearch] Saving FAISS index to {path}...")
         faiss.write_index(self._index, str(path.joinpath('index.faiss')))
+        print(f"[SemanticSearch] FAISS index saved")
 
-        # Save documents and metadata
+        # Save documents and metadata (no indent for faster serialization)
+        print(f"[SemanticSearch] Saving documents and metadata ({len(self._documents)} documents)...")
         import json
+        import time
+        start = time.time()
         with open(path.joinpath('documents.json'), 'w', encoding='utf-8') as f:
             json.dump({
                 'documents': self._documents,
                 'metadata': self._metadata
-            }, f, ensure_ascii=False, indent=2)
-
+            }, f, ensure_ascii=False, indent=None)  # No indent for speed
+        elapsed = time.time() - start
+        print(f"[SemanticSearch] Documents saved in {elapsed:.2f}s")
         print(f"[SemanticSearch] Index saved to {path}")
 
     def load_index(self, path: Path):

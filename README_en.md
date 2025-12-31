@@ -270,6 +270,19 @@ This project is open source under [GPL v3.0](https://www.gnu.org/licenses/gpl-3.
 
 See [Changelog](#changelog) section below.
 
+### [0.8.2] - 2024-12-31
+
+**Added: Chunk-Level Resume Support**
+- SummarizationWorker now includes chunk-level caching mechanism
+- Each text chunk's summary result is independently cached to `cache/summarization/chunk_cache/`
+- Failed retry processing automatically skips completed chunks, resuming from breakpoint
+- Cache keys generated based on text MD5 hash, ensuring identical content produces identical keys
+
+**Fixed: Ask AI Tool Calling Compatibility**
+- Fixed LangChain tool calling compatibility with certain models
+- Tool results passed via user messages to avoid incompatible ToolMessage format
+- Added detailed debug logging for troubleshooting tool call issues
+
 ### [0.8.1] - 2024-12-31
 
 **Added: Page-Level Caching and Resume Support**

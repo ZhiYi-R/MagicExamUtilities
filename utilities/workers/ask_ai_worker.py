@@ -171,15 +171,49 @@ class AskAIWorker(BaseWorker):
 
             response = self._llm_with_tools.invoke(messages)
 
-            # Check if tool calls are needed
-            if hasattr(response, 'response_metadata') and 'tool_calls' in response.response_metadata:
-                # Handle tool calls
-                tool_calls = response.response_metadata['tool_calls']
+            # Debug: log response structure
+            print(f'[AskAIWorker] Response type: {type(response)}')
+            print(f'[AskAIWorker] Has response_metadata: {hasattr(response, "response_metadata")}')
+            if hasattr(response, 'response_metadata'):
+                print(f'[AskAIWorker] response_metadata keys: {response.response_metadata.keys() if isinstance(response.response_metadata, dict) else "N/A"}')
+            print(f'[AskAIWorker] Has tool_calls: {hasattr(response, "tool_calls")}')
+            if hasattr(response, 'tool_calls'):
+                print(f'[AskAIWorker] tool_calls: {response.tool_calls}')
+            print(f'[AskAIWorker] Content: {response.content[:100]}...')
 
+            # Check if tool calls are needed - try multiple locations
+            tool_calls = None
+
+            # Method 1: Check tool_calls attribute (LangChain default)
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                # tool_calls is a list of tool call objects - convert to dict format
+                normalized = []
+                for tc in response.tool_calls:
+                    # Handle both object and dict formats
+                    if hasattr(tc, 'name'):
+                        # LangChain tool call object
+                        normalized.append({
+                            'name': tc.name,
+                            'args': tc.args if hasattr(tc, 'args') else {},
+                            'id': tc.id if hasattr(tc, 'id') else ''
+                        })
+                    elif isinstance(tc, dict):
+                        # Already a dict
+                        normalized.append(tc)
+                tool_calls = normalized
+                print(f'[AskAIWorker] Found tool_calls in response.tool_calls')
+
+            # Method 2: Check response_metadata (some APIs put it there)
+            elif hasattr(response, 'response_metadata') and 'tool_calls' in response.response_metadata:
+                tool_calls = response.response_metadata['tool_calls']
+                print(f'[AskAIWorker] Found tool_calls in response_metadata')
+
+            if tool_calls:
+                # Handle tool calls
                 tool_results = []
                 for tool_call in tool_calls:
                     tool_name = tool_call.get('name', '')
-                    tool_args = tool_call.get('arguments', {})
+                    tool_args = tool_call.get('args', tool_call.get('arguments', {}))
 
                     # Auto-inject kb_id for search_cache if specified
                     if tool_name == 'search_cache' and kb_id:
@@ -189,6 +223,7 @@ class AskAIWorker(BaseWorker):
                     for tool in self._tools:
                         if tool.name == tool_name:
                             result = tool.invoke(tool_args)
+                            print(f'[AskAIWorker] Tool {tool_name} returned {len(result)} chars')
                             tool_results.append(ToolMessage(
                                 content=result,
                                 tool_call_id=tool_call.get('id', '')
@@ -196,8 +231,16 @@ class AskAIWorker(BaseWorker):
                             break
 
                 # Get final response with tool results
-                messages.extend(tool_results)
-                final_response = self._llm.invoke(messages)
+                # Some models don't support ToolMessage format, so we construct a simpler message
+                messages_for_final = list(messages)  # Copy original messages
+
+                # Instead of using ToolMessage, append as user message with tool results
+                tool_context = "\n\n".join([f"工具 {i+1} ({tc.tool_call_id[:8]}...): {tc.content[:500]}..."
+                                            for i, tc in enumerate(tool_results)])
+                messages_for_final.append(HumanMessage(content=f"搜索结果：\n\n{tool_context}\n\n请基于以上搜索结果回答用户的问题。"))
+
+                print(f'[AskAIWorker] Sending final request with {len(tool_results)} tool results')
+                final_response = self._llm.invoke(messages_for_final)
                 answer = final_response.content
 
                 # Track costs for both calls (initial + final)
@@ -268,7 +311,7 @@ class AskAIWorker(BaseWorker):
             Answer to the question
         """
         future = self.submit('ask', question, kb_id, _task_timeout=timeout)
-        return future.get()
+        return future.get(timeout=timeout)
 
     def _estimate_tokens(self, task) -> int:
         """Estimate tokens for Ask AI requests."""

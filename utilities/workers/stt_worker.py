@@ -103,7 +103,7 @@ class STTWorker(BaseWorker):
             Transcribed text
         """
         future = self.submit('stt', audio_path, _task_timeout=timeout)
-        return future.get()
+        return future.get(timeout=timeout)
 
     def process_audios(self, audio_paths: list[pathlib.Path], timeout_per_audio: Optional[float] = None) -> list[str]:
         """

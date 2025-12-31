@@ -269,6 +269,19 @@ Summarization Done for text, length: 5678, usage: 4500 in + 1200 out = 5700 tota
 
 详见 [Changelog](#changelog) 章节。
 
+### [0.8.2] - 2024-12-31
+
+**新增：分块级断点续传**
+- SummarizationWorker 新增分块级缓存机制
+- 每个文本分块的摘要结果独立缓存到 `cache/summarization/chunk_cache/`
+- 处理失败重试时自动跳过已完成的分块，从断点继续处理
+- 基于文本 MD5 哈希生成缓存键，确保相同内容产生相同键
+
+**修复：Ask AI 工具调用兼容性**
+- 修复 LangChain 工具调用与部分模型的兼容性问题
+- 工具结果通过用户消息传递，避免不兼容 ToolMessage 格式
+- 添加详细调试日志，便于排查工具调用问题
+
 ### [0.8.1] - 2024-12-31
 
 **新增：页面级缓存与断点续传**

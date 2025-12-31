@@ -355,6 +355,16 @@ class SummarizationWorker(BaseWorker):
 
     def _estimate_tokens(self, task) -> int:
         """Estimate tokens for summarization requests."""
+        # For summarize_long, only estimate the first chunk's tokens
+        # since chunks are processed sequentially and rate-limited individually
+        if task.method == 'summarize_long' and task.args and len(task.args) > 1:
+            # task.args = (text, max_chars_per_chunk, progress_callback, _timeout)
+            text = task.args[0]
+            max_chars = task.args[1]
+            # Only charge for the first chunk (or max_chars, whichever is smaller)
+            first_chunk_size = min(len(text), max_chars)
+            return first_chunk_size + 2000  # First chunk input + output estimate
+
         # Get the text length from the task args
         if task.args and len(task.args) > 0:
             text = task.args[0]
@@ -407,6 +417,66 @@ class SummarizationWorker(BaseWorker):
 
         return chunks
 
+    def _get_chunk_cache_key(self, text: str, chunk_index: int, max_chars: int) -> str:
+        """
+        Generate a cache key for a chunk.
+
+        Uses hash of text content to ensure same text produces same key.
+
+        Args:
+            text: Full input text
+            chunk_index: Index of the chunk
+            max_chars: Max characters per chunk used for splitting
+
+        Returns:
+            Cache key string
+        """
+        import hashlib
+        # Hash the text to get a stable identifier
+        text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()[:12]
+        return f"chunk_{text_hash}_{chunk_index}_{max_chars}"
+
+    def _load_cached_summary(self, cache_key: str) -> Optional[str]:
+        """
+        Load a cached chunk summary if available.
+
+        Args:
+            cache_key: Cache key for the chunk
+
+        Returns:
+            Cached summary or None if not found
+        """
+        cache_file = self._dump_dir.joinpath('chunk_cache', f'{cache_key}.json')
+        if cache_file.exists():
+            try:
+                import json
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    print(f"[SummarizationWorker] Loaded cached summary for {cache_key}")
+                    return data['summary']
+            except Exception as e:
+                print(f"[SummarizationWorker] Failed to load cache for {cache_key}: {e}")
+        return None
+
+    def _save_cached_summary(self, cache_key: str, summary: str) -> None:
+        """
+        Save a chunk summary to cache.
+
+        Args:
+            cache_key: Cache key for the chunk
+            summary: Summary text to cache
+        """
+        cache_dir = self._dump_dir.joinpath('chunk_cache')
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        cache_file = cache_dir.joinpath(f'{cache_key}.json')
+        try:
+            import json
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({'summary': summary}, f, ensure_ascii=False)
+        except Exception as e:
+            print(f"[SummarizationWorker] Failed to save cache for {cache_key}: {e}")
+
     def _summarize_long_text(
         self,
         text: str,
@@ -416,6 +486,9 @@ class SummarizationWorker(BaseWorker):
     ) -> str:
         """
         Summarize long text by splitting into chunks.
+
+        Supports chunk-level resume: if processing fails, retry will continue
+        from the last successful chunk instead of starting over.
 
         Args:
             text: Long text to summarize
@@ -430,15 +503,29 @@ class SummarizationWorker(BaseWorker):
         chunks = self._split_text_into_chunks(text, max_chars_per_chunk)
         print(f"[SummarizationWorker] Split text into {len(chunks)} chunks")
 
-        # Summarize each chunk
+        # Summarize each chunk with resume support
         chunk_summaries = []
         for i, chunk in enumerate(chunks):
+            cache_key = self._get_chunk_cache_key(text, i, max_chars_per_chunk)
+
+            # Try to load from cache first
+            cached_summary = self._load_cached_summary(cache_key)
+            if cached_summary is not None:
+                chunk_summaries.append(cached_summary)
+                if progress_callback:
+                    progress_callback(i, len(chunks), f"Using cached summary for chunk {i+1}/{len(chunks)}")
+                continue
+
+            # Not cached, need to process
             if progress_callback:
                 progress_callback(i, len(chunks), f"Summarizing chunk {i+1}/{len(chunks)}")
 
             print(f"[SummarizationWorker] Summarizing chunk {i+1}/{len(chunks)} (length: {len(chunk)})")
             summary = self._summarize(chunk, _timeout=_timeout)
             chunk_summaries.append(summary)
+
+            # Cache the result for resume capability
+            self._save_cached_summary(cache_key, summary)
 
         # Combine summaries
         combined_text = '\n\n'.join(chunk_summaries)
@@ -477,12 +564,15 @@ class SummarizationWorker(BaseWorker):
         # Decide whether to use chunking
         if use_chunking and len(text) > max_chars:
             # For long text, use chunking
+            print(f"[SummarizationWorker] Using chunked summarization (text length: {len(text)}, threshold: {max_chars})")
             future = self.submit('summarize_long', text, max_chars, progress_callback, _task_timeout=timeout)
-            return future.get()
+            # Pass timeout to future.get() as well for overall timeout
+            return future.get(timeout=timeout)
         else:
             # For short text, use direct summarization
+            print(f"[SummarizationWorker] Using direct summarization (text length: {len(text)})")
             future = self.submit('summarize', text, _task_timeout=timeout)
-            return future.get()
+            return future.get(timeout=timeout)
 
     def _correct_transcript(self, text: str, _timeout: Optional[float] = None) -> str:
         """
@@ -574,7 +664,7 @@ class SummarizationWorker(BaseWorker):
         # For now, transcript correction doesn't use chunking
         # If needed in the future, we can implement chunked correction similar to summarize_long
         future = self.submit('correct_transcript', text, _task_timeout=timeout)
-        return future.get()
+        return future.get(timeout=timeout)
 
     def _generate_title(self, content: str, _timeout: Optional[float] = None) -> str:
         """
@@ -681,4 +771,4 @@ class SummarizationWorker(BaseWorker):
             Generated title (safe for use as filename)
         """
         future = self.submit('generate_title', content, _task_timeout=timeout)
-        return future.get()
+        return future.get(timeout=timeout)

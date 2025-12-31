@@ -1001,6 +1001,12 @@ class GradioApp:
 
     def build_ui(self):
         """Build the Gradio UI with centered vertical layout."""
+        # Load existing knowledge bases for dropdown initialization
+        kb_manager = self._get_kb_manager()
+        kbs = kb_manager.list_knowledge_bases()
+        kb_choices = [kb.id for kb in kbs]
+        kb_choices_with_empty = [""] + kb_choices
+
         with gr.Blocks(title="妙妙期末小工具") as app:
             gr.Markdown(
                 """
@@ -1200,7 +1206,7 @@ class GradioApp:
                     with gr.Group():
                         ask_kb_dropdown = gr.Dropdown(
                             label="知识库 (可选)",
-                            choices=[],
+                            choices=kb_choices_with_empty,
                             value="",
                             allow_custom_value=False,
                             info="留空则搜索所有缓存"
@@ -1414,7 +1420,7 @@ class GradioApp:
                     with gr.Accordion("管理操作", open=False):
                         with gr.Group():
                             gr.Markdown("#### 添加/移除文档")
-                            manage_kb_id = gr.Dropdown(label="选择知识库", choices=[])
+                            manage_kb_id = gr.Dropdown(label="选择知识库", choices=kb_choices)
                             manage_file_type = gr.Radio(
                                 label="文档类型",
                                 choices=[("PDF", "pdf"), ("音频", "audio")],
@@ -1429,7 +1435,7 @@ class GradioApp:
 
                         with gr.Group():
                             gr.Markdown("#### 重建索引")
-                            rebuild_kb_id = gr.Dropdown(label="选择知识库", choices=[])
+                            rebuild_kb_id = gr.Dropdown(label="选择知识库", choices=kb_choices)
                             rebuild_index_btn = gr.Button("重建索引", variant="primary")
                             rebuild_output = gr.Markdown(label="状态")
 
@@ -1438,17 +1444,17 @@ class GradioApp:
                         result = self._create_kb(kb_id, name, desc, pdfs, audios)
                         kb_manager = self._get_kb_manager()
                         kbs = kb_manager.list_knowledge_bases()
-                        kb_choices = [kb.id for kb in kbs]
+                        updated_kb_choices = [kb.id for kb in kbs]
                         pdfs_list = kb_manager.get_available_pdfs()
                         audios_list = kb_manager.get_available_audios()
                         return (
                             result,
-                            gr.Dropdown(choices=[""] + kb_choices),
-                            gr.Dropdown(choices=kb_choices),
-                            gr.Dropdown(choices=kb_choices),
-                            gr.Dropdown(choices=pdfs_list + audios_list),
-                            gr.CheckboxGroup(choices=pdfs_list),
-                            gr.CheckboxGroup(choices=audios_list),
+                            gr.Dropdown(choices=[""] + updated_kb_choices, value=""),
+                            gr.Dropdown(choices=updated_kb_choices, value=None),
+                            gr.Dropdown(choices=updated_kb_choices, value=None),
+                            gr.Dropdown(choices=pdfs_list + audios_list, value=None),
+                            gr.CheckboxGroup(choices=pdfs_list, value=[]),
+                            gr.CheckboxGroup(choices=audios_list, value=[]),
                         )
 
                     def refresh_create_files_handler():

@@ -292,9 +292,11 @@ class KnowledgeBaseManager:
 
         # Build semantic index
         index_path = self._store.get_kb_index_path(kb_id)
+        print(f"[KBManager] Building semantic index at {index_path}...")
         from ..retrieval.retriever import SemanticSearcher
         searcher = SemanticSearcher()
         searcher.build_index(documents, metadata)
+        print(f"[KBManager] Index built, saving to disk...")
         searcher.save_index(index_path)
 
         print(f"[KBManager] Index built for '{kb_id}': {len(documents)} documents")

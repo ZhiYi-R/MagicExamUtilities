@@ -360,6 +360,10 @@ class BaseWorker(threading.Thread):
         """
         last_exception = None
 
+        # Log task start
+        tokens = self._estimate_tokens(task)
+        print(f"[{self.name}] Starting task {task.id[:8]} (method={task.method}, estimated_tokens={tokens})")
+
         for attempt in range(self._max_retries + 1):
             try:
                 # Execute with timeout (uses task.timeout or worker default)
@@ -424,6 +428,7 @@ class BaseWorker(threading.Thread):
 
             # Apply rate limiting
             tokens = self._estimate_tokens(task)
+            print(f"[{self.name}] Acquiring rate limit for task {task.id[:8]} (tokens={tokens})...")
             self._rate_limiter.acquire(tokens=tokens, block=True)
 
             # Process the task with retry
